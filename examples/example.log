@@ -1,0 +1,146 @@
+NSIS Installer: ./tests/fixtures/full_featured.exe
+  Version:     V3
+  Compression: Lzma (Solid)
+  Encoding:    Unicode
+  Uninstaller: false
+  Legacy:      false
+  Sections:    2
+  Entries:     97
+  Pages:       5
+
+Sections:
+  [  0] Core Files [selected]  2KB
+  [  1] Optional Docs [selected]  1KB
+
+Pages:
+  [ 0] License      " "  [next, cancel]  (pre=>0, show=>3, leave=>9)
+  [ 1] Dir          " "  [back, next, cancel]  (pre=>10, show=>13, leave=>21)
+  [ 2] SelCom       " "  [back, next, cancel]  (pre=>22, show=>25, leave=>39)
+  [ 3] InstFiles    " "  [back]  (pre=>40, show=>43, leave=>49)
+  [ 4] Completed     [back, next]
+
+Files:
+  payload.txt                              offset=0x00000000        55 bytes (raw)
+  config.ini                               offset=0x0000003B        27 bytes (raw)
+
+Callbacks:
+  .onInit                   entry 79
+  .onUserAbort              entry 78
+  .onGUIInit                entry 57
+
+Plugin Calls:
+
+Exec Commands:
+
+Registry Operations:
+  WRITE HKLM\Software\FullFeaturedTest "InstallDir" = "$INSTDIR" (Str)
+  WRITE HKLM\Software\FullFeaturedTest "Version" = "1.0.0" (Str)
+  WRITE HKLM\Software\FullFeaturedTest "MajorVersion" = "1" (Dword)
+  WRITE HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\FullFeaturedTest "DisplayName" = "Full Featured Test" (Str)
+  WRITE HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\FullFeaturedTest "UninstallString" = "\"$INSTDIR\\uninstall.exe\"" (Str)
+
+Shortcuts:
+  $SMPROGRAMS\FullFeaturedTest\Readme.lnk -> $INSTDIR\payload.txt
+  $DESKTOP\FullFeaturedTest.lnk -> $INSTDIR\payload.txt
+
+Uninstallers:
+  $INSTDIR\uninstall.exe (offset=90, icon_size=13956)
+
+Script:
+      0: EW_SENDMESSAGE            output=$_65503_, hwnd=152, msg=155, wparam="0", lparam=-38, flags=2
+      1: EW_SENDMESSAGE            output=$_65503_, hwnd=162, msg=155, wparam="0", lparam=-39, flags=2
+      2: EW_RET                    
+      3: EW_FINDWINDOW             output=$_12_, class="#32770", title=0, parent=172
+      4: EW_GETDLGITEM             output=$_13_, dialog=175, item_id=178
+      5: EW_GETDLGITEM             output=$_14_, dialog=175, item_id=183
+      6: EW_GETDLGITEM             output=$_15_, dialog=175, item_id=188
+      7: EW_SENDMESSAGE            output=$_65503_, hwnd=193, msg=155, wparam="0", lparam=-40, flags=2
+      8: EW_RET                    
+      9: EW_RET                    
+     10: EW_SENDMESSAGE            output=$_65503_, hwnd=152, msg=155, wparam="0", lparam=-41, flags=2
+     11: EW_SENDMESSAGE            output=$_65503_, hwnd=162, msg=155, wparam="0", lparam=-42, flags=2
+     12: EW_RET                    
+     13: EW_FINDWINDOW             output=$_16_, class="#32770", title=0, parent=172
+     14: EW_GETDLGITEM             output=$_17_, dialog=196, item_id=183
+     15: EW_GETDLGITEM             output=$_18_, dialog=196, item_id=199
+     16: EW_GETDLGITEM             output=$_19_, dialog=196, item_id=204
+     17: EW_GETDLGITEM             output=$_20_, dialog=196, item_id=209
+     18: EW_GETDLGITEM             output=$_21_, dialog=196, item_id=214
+     19: EW_GETDLGITEM             output=$_22_, dialog=196, item_id=219
+     20: EW_RET                    
+     21: EW_RET                    
+     22: EW_SENDMESSAGE            output=$_65503_, hwnd=152, msg=155, wparam="0", lparam=-43, flags=2
+     23: EW_SENDMESSAGE            output=$_65503_, hwnd=162, msg=155, wparam="0", lparam=-44, flags=2
+     24: EW_RET                    
+     25: EW_FINDWINDOW             output=$_23_, class="#32770", title=0, parent=172
+     26: EW_GETDLGITEM             output=$_24_, dialog=224, item_id=183
+     27: EW_GETDLGITEM             output=$_25_, dialog=224, item_id=227
+     28: EW_GETDLGITEM             output=$_26_, dialog=224, item_id=232
+     29: EW_GETDLGITEM             output=$_27_, dialog=224, item_id=237
+     30: EW_GETDLGITEM             output=$_28_, dialog=224, item_id=242
+     31: EW_GETDLGITEM             output=$_29_, dialog=224, item_id=247
+     32: EW_GETDLGITEM             output=$_31_, dialog=224, item_id=252
+     33: EW_GETDLGITEM             output=$_32_, dialog=224, item_id=214
+     34: EW_SENDMESSAGE            output=$_65503_, hwnd=257, msg=155, wparam="0", lparam=-45, flags=2
+     35: EW_SHOWWINDOW             hwnd=260, show_state=150
+     36: EW_SENDMESSAGE            output=$_65503_, hwnd=260, msg=155, wparam="0", lparam=-46, flags=2
+     37: EW_ASSIGNVAR              var=$_30_, string=-46, maxlen=0, startpos=0
+     38: EW_RET                    
+     39: EW_RET                    
+     40: EW_SENDMESSAGE            output=$_65503_, hwnd=152, msg=155, wparam="0", lparam=-47, flags=2
+     41: EW_SENDMESSAGE            output=$_65503_, hwnd=162, msg=155, wparam="0", lparam=-48, flags=2
+     42: EW_RET                    
+     43: EW_FINDWINDOW             output=$_33_, class="#32770", title=0, parent=172
+     44: EW_GETDLGITEM             output=$_34_, dialog=263, item_id=183
+     45: EW_GETDLGITEM             output=$_35_, dialog=263, item_id=266
+     46: EW_GETDLGITEM             output=$_36_, dialog=263, item_id=271
+     47: EW_GETDLGITEM             output=$_37_, dialog=263, item_id=276
+     48: EW_RET                    
+     49: EW_IFFLAG                 jump_on=>54, id=3, mask=-1
+     50: EW_SENDMESSAGE            output=$_65503_, hwnd=152, msg=155, wparam="0", lparam=-49, flags=2
+     51: EW_SENDMESSAGE            output=$_65503_, hwnd=162, msg=155, wparam="0", lparam=-50, flags=2
+     52: EW_NOP                    jump_addr=>56
+     53: EW_SENDMESSAGE            output=$_65503_, hwnd=152, msg=155, wparam="0", lparam=-51, flags=2
+     54: EW_SENDMESSAGE            output=$_65503_, hwnd=162, msg=155, wparam="0", lparam=-52, flags=2
+     55: EW_IFFLAG                 jump_on=>57, id=3, mask=-1
+     56: EW_RET                    
+     57: EW_GETDLGITEM             output=$_0_, dialog=172, item_id=281
+     58: EW_CREATEFONT             output=$_1_, face=-53, height=-54, weight=286
+     59: EW_SENDMESSAGE            output=$_65503_, hwnd=152, msg=293, wparam="$_1_", lparam="0"
+     60: EW_GETDLGITEM             output=$_2_, dialog=172, item_id=300
+     61: EW_SETCTLCOLORS           hwnd=152, colors_ptr=0
+     62: EW_SETCTLCOLORS           hwnd=162, colors_ptr=0
+     63: EW_GETDLGITEM             output=$_3_, dialog=172, item_id=305
+     64: EW_SETCTLCOLORS           hwnd=310, colors_ptr=24
+     65: EW_GETDLGITEM             output=$_4_, dialog=172, item_id=313
+     66: EW_SETCTLCOLORS           hwnd=318, colors_ptr=24
+     67: EW_GETDLGITEM             output=$_6_, dialog=172, item_id=321
+     68: EW_SETCTLCOLORS           hwnd=326, colors_ptr=48
+     69: EW_GETDLGITEM             output=$_5_, dialog=172, item_id=329
+     70: EW_SETCTLCOLORS           hwnd=334, colors_ptr=48
+     71: EW_SENDMESSAGE            output=$_65503_, hwnd=334, msg=155, wparam="0", lparam="${LANG:0} ", flags=2
+     72: EW_GETDLGITEM             output=$_7_, dialog=172, item_id=341
+     73: EW_GETDLGITEM             output=$_8_, dialog=172, item_id=346
+     74: EW_GETDLGITEM             output=$_9_, dialog=172, item_id=212
+     75: EW_GETDLGITEM             output=$_10_, dialog=172, item_id=235
+     76: EW_GETDLGITEM             output=$_11_, dialog=172, item_id=217
+     77: EW_RET                    
+     78: EW_RET                    
+     79: EW_MESSAGEBOX             mb_flags=0, text="Initializing..."
+     80: EW_RET                    
+     81: EW_CREATEDIR              path="$INSTDIR", update_instdir=1
+     82: EW_EXTRACTFILE            overwrite=83886224, name="payload.txt", date_lo=-379911424, date_hi=31245568, allow_ignore=-55
+     83: EW_EXTRACTFILE            overwrite=83886224, name="config.ini", data_offset=59, date_lo=-379911424, date_hi=31245568, allow_ignore=-55
+     84: EW_WRITEREG               root=-2147483646, keyname="Software\\FullFeaturedTest", itemname="InstallDir", data="$INSTDIR", typelen=1
+     85: EW_WRITEREG               root=-2147483646, keyname="Software\\FullFeaturedTest", itemname="Version", data="1.0.0", typelen=1
+     86: EW_WRITEREG               root=-2147483646, keyname="Software\\FullFeaturedTest", itemname="MajorVersion", data="1", typelen=4
+     87: EW_WRITEREG               root=-2147483646, keyname="Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\FullFeaturedTest", itemname="DisplayName", data="Full Featured Test", typelen=1
+     88: EW_WRITEREG               root=-2147483646, keyname="Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\FullFeaturedTest", itemname="UninstallString", data="\"$INSTDIR\\uninstall.exe\"", typelen=1
+     89: EW_CREATEDIR              path="$SMPROGRAMS\\FullFeaturedTest", update_instdir=0
+     90: EW_CREATESHORTCUT         link="$SMPROGRAMS\\FullFeaturedTest\\Readme.lnk", target="$INSTDIR\\payload.txt", params=0, icon=0
+     91: EW_CREATESHORTCUT         link="$DESKTOP\\FullFeaturedTest.lnk", target="$INSTDIR\\payload.txt", params=0, icon=0
+     92: EW_WRITEUNINSTALLER       name="$INSTDIR\\uninstall.exe", offset=90, icon_size=13956
+     93: EW_RET                    
+     94: EW_CREATEDIR              path="$INSTDIR\\docs", update_instdir=1
+     95: EW_EXTRACTFILE            overwrite=83886224, name="payload.txt", date_lo=-379911424, date_hi=31245568, allow_ignore=-55
+     96: EW_RET                    

@@ -1,0 +1,20 @@
+[package]
+name = "nsis"
+version = "0.1.0"
+edition = "2024"
+authors = ["Johann Kempter <admin@binflip.rs>"]
+rust-version = "1.85"
+description = "Parse and inspect NSIS installer binaries"
+license = "Apache-2.0"
+repository = "https://github.com/BinFlip/nsis-rs"
+readme = "README.md"
+keywords = ["nsis", "installer", "parser", "reverse-engineering", "binary-analysis"]
+categories = ["parser-implementations"]
+
+[dependencies]
+goblin = "0.10.5"
+flate2 = "1.1.9"
+lzma-rs = "0.3.0"
+
+[dev-dependencies]
+proptest = "1.11.0"
