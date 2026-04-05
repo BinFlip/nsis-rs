@@ -20,7 +20,7 @@
 //! resumable state machine (with `switch`/`goto`) so the decompressor can yield
 //! when the input buffer is exhausted. Since we always have the complete input
 //! buffer available, this Rust port restructures the logic as a straightforward
-//! blocking decoder that reads from a [`BitReader`].
+//! blocking decoder that reads from a `BitReader`.
 //!
 //! # References
 //!
