@@ -14,7 +14,7 @@ pub mod info;
 pub mod version;
 
 pub use info::OpcodeInfo;
-pub use version::NsisVersion;
+pub use version::{NsisVersion, ParkSubVersion};
 
 // Opcode indices from `fileform.h`.
 // These are the `which` values stored in entry structures.
@@ -162,6 +162,112 @@ pub const EW_FPUTWS: i32 = 69;
 /// FileReadUTF16LE.
 pub const EW_FGETWS: i32 = 70;
 
+/// Normalizes a Park raw opcode to its V2-equivalent opcode number.
+///
+/// Park builds insert extra opcodes into the table, shifting subsequent
+/// opcode numbers upward. This function reverses that shift so the raw
+/// opcode can be looked up in the V2 table.
+///
+/// Implements the same logic as 7-Zip `NsisIn.cpp` `GetCmd()`.
+pub fn normalize_park_opcode(raw: u32, sub: ParkSubVersion) -> u32 {
+    let mut a = raw;
+
+    // Opcodes below EW_REGISTERDLL (44) are the same in all versions.
+    if a < EW_REGISTERDLL as u32 {
+        return a;
+    }
+
+    // Park2+: GetFontVersion inserted at position 44.
+    if matches!(sub, ParkSubVersion::Park2 | ParkSubVersion::Park3) {
+        if a == EW_REGISTERDLL as u32 {
+            // This raw opcode is the inserted GetFontVersion — not a V2
+            // opcode. Return it as-is so lookup() returns None (or
+            // the caller can handle it).
+            return raw;
+        }
+        a -= 1;
+    }
+
+    // Park3+: GetFontName inserted at position 44 (after the Park2 shift).
+    if sub == ParkSubVersion::Park3 {
+        if a == EW_REGISTERDLL as u32 {
+            return raw; // inserted GetFontName
+        }
+        a -= 1;
+    }
+
+    // Unicode Park: EW_FPUTWS and EW_FGETWS inserted before EW_FSEEK.
+    // Park is always Unicode.
+    if a >= EW_FSEEK as u32 {
+        if a == EW_FSEEK as u32 {
+            return EW_FPUTWS as u32;
+        }
+        if a == EW_FSEEK as u32 + 1 {
+            return EW_FGETWS as u32;
+        }
+        a -= 2;
+    }
+
+    a
+}
+
+/// Detects the Park sub-version by scanning entry opcodes.
+///
+/// Replicates 7-Zip's `DetectNsisType()` logic: find entries whose raw
+/// opcode falls in `[EW_WRITEUNINSTALLER .. EW_WRITEUNINSTALLER + 4]` and
+/// whose parameters match the WriteUninstaller signature (param[0] > 1,
+/// param[3] > 1, param[4] == 0, param[5] == 0).
+///
+/// The offset from `EW_WRITEUNINSTALLER` reveals how many extra opcodes
+/// were inserted, which identifies the sub-version.
+pub fn detect_park_sub_version(
+    header_data: &[u8],
+    entry_block_offset: usize,
+    entry_count: usize,
+) -> ParkSubVersion {
+    use crate::nsis::entry::Entry;
+    use crate::util::read_i32_le;
+
+    // The maximum number of extra inserts for Unicode Park is 4.
+    let base = EW_WRITEUNINSTALLER;
+    let max_raw = base + 4;
+
+    let mut mask: u32 = 0;
+
+    for i in 0..entry_count {
+        let offset = entry_block_offset + i * Entry::SIZE;
+        if offset + Entry::SIZE > header_data.len() {
+            break;
+        }
+        let raw_cmd = read_i32_le(header_data, offset);
+        if raw_cmd < base || raw_cmd > max_raw {
+            continue;
+        }
+
+        // Read params.
+        let p0 = read_i32_le(header_data, offset + 4);
+        let p3 = read_i32_le(header_data, offset + 16);
+        let p4 = read_i32_le(header_data, offset + 20);
+        let p5 = read_i32_le(header_data, offset + 24);
+
+        // Filter: must have valid path strings and zero in params[4..5].
+        if p4 != 0 || p5 != 0 || p0 <= 1 || p3 <= 1 {
+            continue;
+        }
+
+        let num_inserts = (raw_cmd - base) as u32;
+        mask |= 1 << num_inserts;
+    }
+
+    // Park sub-version from mask (Unicode mode).
+    // Source: 7-Zip NsisIn.cpp lines 2656-2661.
+    match mask {
+        m if m & (1 << 4) != 0 => ParkSubVersion::Park3,
+        m if m & (1 << 3) != 0 => ParkSubVersion::Park2,
+        _ => ParkSubVersion::Park1,
+    }
+}
+
 /// Looks up opcode metadata for the given opcode index and NSIS version.
 ///
 /// Returns `None` if the opcode index is out of range for the given version.
@@ -169,11 +275,26 @@ pub fn lookup(version: NsisVersion, which: u32) -> Option<&'static OpcodeInfo> {
     let table: &[OpcodeInfo] = match version {
         NsisVersion::V2 => &info::OPCODES_NSIS2,
         NsisVersion::V3 => info::OPCODES_NSIS3,
-        // V1 and Park use the V2 table as a fallback.
         NsisVersion::V1 | NsisVersion::Park => &info::OPCODES_NSIS2,
     };
 
     table.get(which as usize)
+}
+
+/// Looks up opcode metadata with Park-aware normalization.
+///
+/// For Park version, the raw opcode is first normalized to its V2 equivalent
+/// before table lookup.
+pub fn lookup_normalized(
+    version: NsisVersion,
+    which: u32,
+    park_sub: Option<ParkSubVersion>,
+) -> Option<&'static OpcodeInfo> {
+    let normalized = match (version, park_sub) {
+        (NsisVersion::Park, Some(sub)) => normalize_park_opcode(which, sub),
+        _ => which,
+    };
+    lookup(version, normalized)
 }
 
 #[cfg(test)]

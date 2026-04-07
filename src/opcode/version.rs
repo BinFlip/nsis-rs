@@ -20,6 +20,30 @@ pub enum NsisVersion {
     Park,
 }
 
+/// Park sub-version, determined by the number of extra opcodes inserted.
+///
+/// The Park fork inserts extra opcodes into the opcode table:
+/// - `Park1`: No extra opcodes before `EW_REGISTERDLL`.
+/// - `Park2`: Inserts `GetFontVersion` at position 44.
+/// - `Park3`: Inserts `GetFontVersion` and `GetFontName` at position 44.
+///
+/// Additionally, Unicode Park builds insert `EW_FPUTWS` and `EW_FGETWS`
+/// before `EW_FSEEK`. Since Park is always Unicode, this always applies,
+/// contributing a total shift of 2 (Park1), 3 (Park2), or 4 (Park3) for
+/// opcodes >= `EW_FSEEK`.
+///
+/// Source: 7-Zip `NsisIn.cpp` `GetCmd()` and `DetectNsisType()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParkSubVersion {
+    /// No extra opcodes before `EW_REGISTERDLL`.
+    Park1,
+    /// One extra opcode (`GetFontVersion`) before `EW_REGISTERDLL`.
+    Park2,
+    /// Two extra opcodes (`GetFontVersion`, `GetFontName`) before
+    /// `EW_REGISTERDLL`.
+    Park3,
+}
+
 impl NsisVersion {
     /// Detects the NSIS version from available heuristics.
     ///

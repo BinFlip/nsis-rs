@@ -533,18 +533,26 @@ impl<'a> Uninstaller<'a> {
         self.entry.offset(2)
     }
 
-    /// Returns the raw payload bytes of the uninstaller stub.
+    /// Returns the raw payload bytes of the uninstaller NSIS overlay data.
     ///
-    /// The data is located in the data block (or solid data) at the offset
-    /// given by [`data_offset`](Self::data_offset), framed with a 4-byte
-    /// NSIS length prefix. This method returns the bytes after the prefix.
+    /// The data block at [`data_offset`](Self::data_offset) contains:
+    /// 1. Icon/patch data (size = [`icon_size`](Self::icon_size)), with a
+    ///    4-byte NSIS length prefix.
+    /// 2. The NSIS overlay data, with its own 4-byte length prefix.
+    ///
+    /// This method skips the icon data and returns the overlay bytes.
     pub fn data(&self) -> &[u8] {
         let source = self.data_source();
-        let offset = self.source_offset();
-        let Some((_, size)) = self.length_prefix() else {
+        let Some(overlay_offset) = self.overlay_offset() else {
             return &[];
         };
-        let start = offset + 4;
+        if overlay_offset + 4 > source.len() {
+            return &[];
+        }
+        let Ok((_, size)) = decompress::read_length_prefix(&source[overlay_offset..]) else {
+            return &[];
+        };
+        let start = overlay_offset + 4;
         let end = start + size as usize;
         if end <= source.len() {
             &source[start..end]
@@ -555,43 +563,87 @@ impl<'a> Uninstaller<'a> {
 
     /// Decompresses the uninstaller stub and returns its content.
     ///
-    /// The returned bytes are a complete PE executable with an NSIS overlay
-    /// that can be written to disk or parsed with [`NsisInstaller::from_bytes`].
+    /// The data block at [`data_offset`](Self::data_offset) contains the
+    /// icon/patch data followed by the NSIS overlay. This method skips the
+    /// icon data and decompresses the overlay, then prepends the PE stub
+    /// from the original installer to produce a complete uninstaller PE.
     pub fn decompress(&self) -> Result<Vec<u8>, Error> {
         let source = self.data_source();
-        let offset = self.source_offset();
-        let Some((is_compressed, size)) = self.length_prefix() else {
+        let overlay_offset = self.overlay_offset().ok_or(Error::TooShort {
+            expected: 4,
+            actual: 0,
+            context: "uninstaller icon data length prefix",
+        })?;
+
+        if overlay_offset + 4 > source.len() {
             return Err(Error::TooShort {
+                expected: overlay_offset + 4,
+                actual: source.len(),
+                context: "uninstaller overlay length prefix",
+            });
+        }
+        let (is_compressed, size) = decompress::read_length_prefix(&source[overlay_offset..])
+            .map_err(|_| Error::TooShort {
                 expected: 4,
                 actual: 0,
-                context: "uninstaller data length prefix",
-            });
-        };
-        let start = offset + 4;
+                context: "uninstaller overlay length prefix",
+            })?;
+
+        let start = overlay_offset + 4;
         let end = start + size as usize;
         if end > source.len() {
             return Err(Error::TooShort {
                 expected: end,
                 actual: source.len(),
-                context: "uninstaller data payload",
+                context: "uninstaller overlay payload",
             });
         }
         let payload = &source[start..end];
-        if !is_compressed {
-            return Ok(payload.to_vec());
-        }
-        let max_output = (size as usize * 10).max(64 * 1024 * 1024);
-        decompress::decompress_block(
-            payload,
-            self.installer.compression(),
-            max_output,
-            Some(max_output),
-        )
+
+        let overlay_data = if !is_compressed {
+            payload.to_vec()
+        } else {
+            let max_output = (size as usize * 10).max(64 * 1024 * 1024);
+            decompress::decompress_block(
+                payload,
+                self.installer.compression(),
+                max_output,
+                Some(max_output),
+            )?
+        };
+
+        // Prepend the PE stub from the original file.
+        let pe_stub_size = self.installer.first_header_file_offset();
+        let pe_stub =
+            &self.installer.file_data()[..pe_stub_size.min(self.installer.file_data().len())];
+
+        let mut result = Vec::with_capacity(pe_stub.len() + overlay_data.len());
+        result.extend_from_slice(pe_stub);
+        result.extend_from_slice(&overlay_data);
+        Ok(result)
     }
 
     /// Returns the underlying [`Entry`].
     pub fn entry(&self) -> &Entry<'a> {
         &self.entry
+    }
+
+    /// Returns the byte offset within the data source where the NSIS overlay
+    /// starts (after skipping the icon/patch data entry).
+    fn overlay_offset(&self) -> Option<usize> {
+        let source = self.data_source();
+        let offset = self.source_offset();
+        if offset + 4 > source.len() {
+            return None;
+        }
+        let (_, icon_size) = decompress::read_length_prefix(&source[offset..]).ok()?;
+        // Skip: 4-byte prefix + icon data.
+        let after_icon = offset + 4 + icon_size as usize;
+        if after_icon + 4 <= source.len() {
+            Some(after_icon)
+        } else {
+            None
+        }
     }
 
     fn data_source(&self) -> &[u8] {
@@ -608,15 +660,6 @@ impl<'a> Uninstaller<'a> {
         } else {
             self.installer.data_block_offset() + self.data_offset().max(0) as usize
         }
-    }
-
-    fn length_prefix(&self) -> Option<(bool, u32)> {
-        let source = self.data_source();
-        let offset = self.source_offset();
-        if offset + 4 > source.len() {
-            return None;
-        }
-        decompress::read_length_prefix(&source[offset..]).ok()
     }
 }
 
@@ -643,7 +686,7 @@ impl<'a> Iterator for PluginCallIter<'a> {
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };
-            if entry.which() == opcode::EW_REGISTERDLL {
+            if self.installer.normalize_opcode(entry.which()) == opcode::EW_REGISTERDLL {
                 return Some(Ok(PluginCall {
                     installer: self.installer,
                     entry,
@@ -676,7 +719,7 @@ impl<'a> Iterator for ExecIter<'a> {
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };
-            match entry.which() {
+            match self.installer.normalize_opcode(entry.which()) {
                 opcode::EW_EXECUTE => {
                     return Some(Ok(ExecCommand::Exec(ExecOp {
                         installer: self.installer,
@@ -718,7 +761,7 @@ impl<'a> Iterator for RegistryIter<'a> {
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };
-            match entry.which() {
+            match self.installer.normalize_opcode(entry.which()) {
                 opcode::EW_WRITEREG => {
                     return Some(Ok(RegistryOp::Write(RegWrite {
                         installer: self.installer,
@@ -766,7 +809,7 @@ impl<'a> Iterator for ShortcutIter<'a> {
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };
-            if entry.which() == opcode::EW_CREATESHORTCUT {
+            if self.installer.normalize_opcode(entry.which()) == opcode::EW_CREATESHORTCUT {
                 return Some(Ok(Shortcut {
                     installer: self.installer,
                     entry,
@@ -799,7 +842,7 @@ impl<'a> Iterator for UninstallerIter<'a> {
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };
-            if entry.which() == opcode::EW_WRITEUNINSTALLER {
+            if self.installer.normalize_opcode(entry.which()) == opcode::EW_WRITEUNINSTALLER {
                 return Some(Ok(Uninstaller {
                     installer: self.installer,
                     entry,

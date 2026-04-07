@@ -234,7 +234,7 @@ impl<'a> Iterator for FileIter<'a> {
             let entry_result = self.entries.next()?;
             match entry_result {
                 Ok(entry) => {
-                    if entry.which() == opcode::EW_EXTRACTFILE {
+                    if self.installer.normalize_opcode(entry.which()) == opcode::EW_EXTRACTFILE {
                         return Some(Ok(ExtractedFile {
                             installer: self.installer,
                             entry,

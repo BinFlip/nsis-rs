@@ -18,7 +18,7 @@ use crate::{
         page::PageIter,
         section::{Section, SectionIter},
     },
-    opcode::NsisVersion,
+    opcode::{self, NsisVersion, ParkSubVersion},
     strings::{self, NsisString, StringEncoding},
 };
 
@@ -85,6 +85,8 @@ pub struct NsisInstaller<'a> {
     /// onGUIEnd, onMouseOverSection, onVerifyInstDir, onSelChange, onRebootFailed.
     /// Value of -1 means the callback is not defined.
     callbacks: [i32; 10],
+    /// Park sub-version (only meaningful when `version == Park`).
+    park_sub: Option<ParkSubVersion>,
 }
 
 impl<'a> NsisInstaller<'a> {
@@ -177,6 +179,19 @@ impl<'a> NsisInstaller<'a> {
 
         let version = NsisVersion::detect(encoding, is_legacy);
 
+        // Step 5b: Detect Park sub-version by scanning entries.
+        let park_sub = if version == NsisVersion::Park {
+            let ent_offset = blocks[BlockType::Entries as usize].0 as usize;
+            let ent_count = blocks[BlockType::Entries as usize].1.max(0) as usize;
+            Some(opcode::detect_park_sub_version(
+                &header_data,
+                ent_offset,
+                ent_count,
+            ))
+        } else {
+            None
+        };
+
         // Step 6: Handle data block.
         let (data_block_offset, solid_data) = if mode == CompressionMode::Solid {
             // In solid mode, the entire post-FirstHeader data is one compressed
@@ -241,6 +256,7 @@ impl<'a> NsisInstaller<'a> {
             langtable_size,
             section_size,
             callbacks,
+            park_sub,
         })
     }
 
@@ -402,12 +418,33 @@ impl<'a> NsisInstaller<'a> {
         FileIter::new(self, entries)
     }
 
+    /// Normalizes a raw opcode to its V2-equivalent number.
+    ///
+    /// For Park version, raw opcodes are shifted due to inserted extra
+    /// opcodes. This method reverses that shift. For other versions the
+    /// raw opcode is returned unchanged.
+    #[inline]
+    pub fn normalize_opcode(&self, raw: i32) -> i32 {
+        if raw < 0 {
+            return raw;
+        }
+        if self.version == NsisVersion::Park {
+            if let Some(sub) = self.park_sub {
+                return opcode::normalize_park_opcode(raw as u32, sub) as i32;
+            }
+        }
+        raw
+    }
+
     /// Resolves an opcode index to its metadata.
+    ///
+    /// For Park version, the raw opcode is first normalized to its V2
+    /// equivalent before lookup.
     pub fn resolve_opcode(&self, which: i32) -> Option<&'static crate::opcode::OpcodeInfo> {
         if which < 0 {
             return None;
         }
-        crate::opcode::lookup(self.version, which as u32)
+        crate::opcode::lookup_normalized(self.version, which as u32, self.park_sub)
     }
 
     /// Returns the data block offset within the original file (non-solid only).
