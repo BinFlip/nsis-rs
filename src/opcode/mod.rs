@@ -215,8 +215,8 @@ pub fn normalize_park_opcode(raw: u32, sub: ParkSubVersion) -> u32 {
 ///
 /// Replicates 7-Zip's `DetectNsisType()` logic: find entries whose raw
 /// opcode falls in `[EW_WRITEUNINSTALLER .. EW_WRITEUNINSTALLER + 4]` and
-/// whose parameters match the WriteUninstaller signature (param[0] > 1,
-/// param[3] > 1, param[4] == 0, param[5] == 0).
+/// whose parameters match the WriteUninstaller signature (param\[0\] > 1,
+/// param\[3\] > 1, param\[4\] == 0, param\[5\] == 0).
 ///
 /// The offset from `EW_WRITEUNINSTALLER` reveals how many extra opcodes
 /// were inserted, which identifies the sub-version.
