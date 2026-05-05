@@ -50,7 +50,11 @@ impl<'a> Entry<'a> {
             });
         }
         Ok(Self {
-            bytes: &data[..Self::SIZE],
+            bytes: data.get(..Self::SIZE).ok_or(Error::TooShort {
+                expected: Self::SIZE,
+                actual: data.len(),
+                context: "Entry",
+            })?,
         })
     }
 
@@ -68,7 +72,8 @@ impl<'a> Entry<'a> {
         if index >= MAX_ENTRY_OFFSETS {
             return 0;
         }
-        read_i32_le(self.bytes, 4 + index * 4)
+        // index < MAX_ENTRY_OFFSETS = 6, so 4 + 4*index <= 24, no overflow.
+        read_i32_le(self.bytes, 4_usize.saturating_add(index.saturating_mul(4)))
     }
 
     /// Returns all 6 parameter offsets.
@@ -112,9 +117,10 @@ impl<'a> Iterator for EntryIter<'a> {
         if self.remaining == 0 {
             return None;
         }
-        self.remaining -= 1;
-        let result = Entry::parse(&self.data[self.offset..]);
-        self.offset += Entry::SIZE;
+        self.remaining = self.remaining.saturating_sub(1);
+        let slice = self.data.get(self.offset..).unwrap_or(&[]);
+        let result = Entry::parse(slice);
+        self.offset = self.offset.saturating_add(Entry::SIZE);
         Some(result)
     }
 

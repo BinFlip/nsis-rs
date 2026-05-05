@@ -5,6 +5,8 @@
 //!
 //! Source: NRS `nsisfile.py` `_detect_version()` and Binary Refinery `xtnsis.py`.
 
+use core::fmt;
+
 use crate::strings::StringEncoding;
 
 /// Identifies the NSIS version for opcode resolution and header layout.
@@ -18,6 +20,18 @@ pub enum NsisVersion {
     V3,
     /// Jim Park's Unicode fork.
     Park,
+}
+
+impl fmt::Display for NsisVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            NsisVersion::V1 => "NSIS 1",
+            NsisVersion::V2 => "NSIS 2",
+            NsisVersion::V3 => "NSIS 3",
+            NsisVersion::Park => "NSIS Park",
+        };
+        f.write_str(s)
+    }
 }
 
 /// Park sub-version, determined by the number of extra opcodes inserted.

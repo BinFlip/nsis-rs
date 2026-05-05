@@ -16,6 +16,8 @@ pub mod bzip2;
 pub mod deflate;
 pub mod lzma;
 
+use core::fmt;
+
 use crate::error::Error;
 
 /// Identifies the compression algorithm used by an NSIS installer.
@@ -38,6 +40,28 @@ pub enum CompressionMode {
     Solid,
     /// Each block compressed independently.
     NonSolid,
+}
+
+impl fmt::Display for CompressionMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            CompressionMethod::Deflate => "deflate",
+            CompressionMethod::Bzip2 => "bzip2",
+            CompressionMethod::Lzma => "lzma",
+            CompressionMethod::None => "none",
+        };
+        f.write_str(s)
+    }
+}
+
+impl fmt::Display for CompressionMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            CompressionMode::Solid => "solid",
+            CompressionMode::NonSolid => "non-solid",
+        };
+        f.write_str(s)
+    }
 }
 
 /// Reads a 4-byte NSIS length prefix.
@@ -75,13 +99,13 @@ pub fn detect_compression(data: &[u8]) -> CompressionMethod {
     }
 
     // LZMA: properties byte is typically 0x5D (lc=3, lp=0, pb=2).
-    if data[0] == 0x5D && data.len() >= 5 {
+    if data.first().copied() == Some(0x5D) && data.len() >= 5 {
         return CompressionMethod::Lzma;
     }
 
     // NSIS bzip2 starts with a block magic that differs from standard bzip2.
     // The first byte of an NSIS bzip2 stream is '1' (0x31) for the block size digit.
-    if data[0] == 0x31 && data.len() >= 4 {
+    if data.first().copied() == Some(0x31) && data.len() >= 4 {
         return CompressionMethod::Bzip2;
     }
 
@@ -146,39 +170,43 @@ pub fn decompress_header(
     // If the length prefix produces values that don't fit, we skip to solid mode.
     let (is_compressed, size) = read_length_prefix(data)?;
 
-    if !is_compressed && (4 + size as usize) <= data.len() {
+    let size_usize = size as usize;
+    let payload_end = 4_usize.checked_add(size_usize);
+    if !is_compressed && payload_end.is_some_and(|end| end <= data.len()) {
         // Data is uncompressed — just take the raw bytes.
-        let size = size as usize;
-        return Ok((
-            data[4..4 + size].to_vec(),
-            CompressionMethod::None,
-            CompressionMode::NonSolid,
-            4 + size,
-        ));
+        let bytes = data.get(4..).and_then(|s| s.get(..size_usize));
+        if let Some(bytes) = bytes {
+            return Ok((
+                bytes.to_vec(),
+                CompressionMethod::None,
+                CompressionMode::NonSolid,
+                payload_end.unwrap_or(0),
+            ));
+        }
     }
 
-    let compressed_size = size as usize;
-    let non_solid_viable = is_compressed && data.len() >= 4 + compressed_size;
-    let compressed_data = if non_solid_viable {
-        &data[4..4 + compressed_size]
+    let compressed_size = size_usize;
+    let non_solid_consumed = 4_usize.saturating_add(compressed_size);
+    let non_solid_viable = is_compressed && data.len() >= non_solid_consumed;
+    let compressed_data: &[u8] = if non_solid_viable {
+        data.get(4..non_solid_consumed).unwrap_or(&[])
     } else {
-        &[] as &[u8]
+        &[]
     };
-    let non_solid_consumed = 4 + compressed_size;
 
     // Try to detect and decompress with non-solid framing.
     // In non-solid mode the length prefix cleanly frames the compressed data,
     // so LZMA does not need a known uncompressed size.
     let method = detect_compression(compressed_data);
-    if let Ok(decompressed) = decompress_block(compressed_data, method, expected_size, None) {
-        if !decompressed.is_empty() {
-            return Ok((
-                decompressed,
-                method,
-                CompressionMode::NonSolid,
-                non_solid_consumed,
-            ));
-        }
+    if let Ok(decompressed) = decompress_block(compressed_data, method, expected_size, None)
+        && !decompressed.is_empty()
+    {
+        return Ok((
+            decompressed,
+            method,
+            CompressionMode::NonSolid,
+            non_solid_consumed,
+        ));
     }
 
     // If the detected method failed, try the other methods.
@@ -191,15 +219,15 @@ pub fn decompress_header(
         if m == method {
             continue;
         }
-        if let Ok(decompressed) = decompress_block(compressed_data, m, expected_size, None) {
-            if !decompressed.is_empty() {
-                return Ok((
-                    decompressed,
-                    m,
-                    CompressionMode::NonSolid,
-                    non_solid_consumed,
-                ));
-            }
+        if let Ok(decompressed) = decompress_block(compressed_data, m, expected_size, None)
+            && !decompressed.is_empty()
+        {
+            return Ok((
+                decompressed,
+                m,
+                CompressionMode::NonSolid,
+                non_solid_consumed,
+            ));
         }
     }
 
@@ -214,7 +242,7 @@ pub fn decompress_header(
     // `fileform.c`) reads and consumes this prefix before returning the header
     // data. We must include those 4 bytes in the decompression output and
     // strip them afterwards.
-    let solid_expected = expected_size + 4; // account for in-stream length prefix
+    let solid_expected = expected_size.saturating_add(4); // account for in-stream length prefix
     let solid_method = detect_compression(data);
     if let Ok(decompressed) =
         decompress_block(data, solid_method, solid_expected, Some(solid_expected))
@@ -253,9 +281,9 @@ fn strip_solid_prefix(data: Vec<u8>) -> Result<Vec<u8>, Error> {
         });
     }
     let prefix = crate::util::read_u32_le(&data, 0) as usize;
-    if prefix == data.len() - 4 {
+    if prefix == data.len().saturating_sub(4) {
         // Prefix matches exactly — strip it.
-        Ok(data[4..].to_vec())
+        Ok(data.get(4..).unwrap_or(&[]).to_vec())
     } else {
         // Prefix doesn't match. This can happen if the data isn't actually
         // solid-framed (e.g., some NSIS versions omit the prefix). Return

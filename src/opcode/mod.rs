@@ -185,7 +185,7 @@ pub fn normalize_park_opcode(raw: u32, sub: ParkSubVersion) -> u32 {
             // the caller can handle it).
             return raw;
         }
-        a -= 1;
+        a = a.saturating_sub(1);
     }
 
     // Park3+: GetFontName inserted at position 44 (after the Park2 shift).
@@ -193,7 +193,7 @@ pub fn normalize_park_opcode(raw: u32, sub: ParkSubVersion) -> u32 {
         if a == EW_REGISTERDLL as u32 {
             return raw; // inserted GetFontName
         }
-        a -= 1;
+        a = a.saturating_sub(1);
     }
 
     // Unicode Park: EW_FPUTWS and EW_FGETWS inserted before EW_FSEEK.
@@ -202,10 +202,10 @@ pub fn normalize_park_opcode(raw: u32, sub: ParkSubVersion) -> u32 {
         if a == EW_FSEEK as u32 {
             return EW_FPUTWS as u32;
         }
-        if a == EW_FSEEK as u32 + 1 {
+        if a == (EW_FSEEK as u32).saturating_add(1) {
             return EW_FGETWS as u32;
         }
-        a -= 2;
+        a = a.saturating_sub(2);
     }
 
     a
@@ -235,8 +235,16 @@ pub fn detect_park_sub_version(
     let mut mask: u32 = 0;
 
     for i in 0..entry_count {
-        let offset = entry_block_offset + i * Entry::SIZE;
-        if offset + Entry::SIZE > header_data.len() {
+        let Some(offset) = i
+            .checked_mul(Entry::SIZE)
+            .and_then(|n| n.checked_add(entry_block_offset))
+        else {
+            break;
+        };
+        let Some(end) = offset.checked_add(Entry::SIZE) else {
+            break;
+        };
+        if end > header_data.len() {
             break;
         }
         let raw_cmd = read_i32_le(header_data, offset);
@@ -245,18 +253,18 @@ pub fn detect_park_sub_version(
         }
 
         // Read params.
-        let p0 = read_i32_le(header_data, offset + 4);
-        let p3 = read_i32_le(header_data, offset + 16);
-        let p4 = read_i32_le(header_data, offset + 20);
-        let p5 = read_i32_le(header_data, offset + 24);
+        let p0 = read_i32_le(header_data, offset.saturating_add(4));
+        let p3 = read_i32_le(header_data, offset.saturating_add(16));
+        let p4 = read_i32_le(header_data, offset.saturating_add(20));
+        let p5 = read_i32_le(header_data, offset.saturating_add(24));
 
         // Filter: must have valid path strings and zero in params[4..5].
         if p4 != 0 || p5 != 0 || p0 <= 1 || p3 <= 1 {
             continue;
         }
 
-        let num_inserts = (raw_cmd - base) as u32;
-        mask |= 1 << num_inserts;
+        let num_inserts = raw_cmd.saturating_sub(base) as u32;
+        mask |= 1_u32.checked_shl(num_inserts).unwrap_or(0);
     }
 
     // Park sub-version from mask (Unicode mode).

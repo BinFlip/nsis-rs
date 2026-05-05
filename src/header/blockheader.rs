@@ -82,6 +82,12 @@ pub struct BlockHeader<'a> {
     bytes: &'a [u8],
 }
 
+/// An all-zero `BlockHeader` (offset = 0, num = 0).
+///
+/// Used as a default placeholder when constructing arrays of block headers
+/// before parsing populates them.
+pub const EMPTY_BLOCK: BlockHeader<'static> = BlockHeader { bytes: &[0u8; 8] };
+
 impl<'a> BlockHeader<'a> {
     /// The on-disk size of a block header in bytes.
     pub const SIZE: usize = 8;
@@ -100,7 +106,11 @@ impl<'a> BlockHeader<'a> {
             });
         }
         Ok(Self {
-            bytes: &data[..Self::SIZE],
+            bytes: data.get(..Self::SIZE).ok_or(Error::TooShort {
+                expected: Self::SIZE,
+                actual: data.len(),
+                context: "BlockHeader",
+            })?,
         })
     }
 

@@ -9,8 +9,10 @@
 /// Returns `0` if `offset + 2 > data.len()`.
 #[inline(always)]
 pub(crate) fn read_u16_le(data: &[u8], offset: usize) -> u16 {
-    data.get(offset..offset + 2)
-        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+    data.get(offset..)
+        .and_then(|s| s.first_chunk::<2>())
+        .copied()
+        .map(u16::from_le_bytes)
         .unwrap_or(0)
 }
 
@@ -19,8 +21,10 @@ pub(crate) fn read_u16_le(data: &[u8], offset: usize) -> u16 {
 /// Returns `0` if `offset + 4 > data.len()`.
 #[inline(always)]
 pub(crate) fn read_u32_le(data: &[u8], offset: usize) -> u32 {
-    data.get(offset..offset + 4)
-        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    data.get(offset..)
+        .and_then(|s| s.first_chunk::<4>())
+        .copied()
+        .map(u32::from_le_bytes)
         .unwrap_or(0)
 }
 
@@ -29,8 +33,10 @@ pub(crate) fn read_u32_le(data: &[u8], offset: usize) -> u32 {
 /// Returns `0` if `offset + 4 > data.len()`.
 #[inline(always)]
 pub(crate) fn read_i32_le(data: &[u8], offset: usize) -> i32 {
-    data.get(offset..offset + 4)
-        .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    data.get(offset..)
+        .and_then(|s| s.first_chunk::<4>())
+        .copied()
+        .map(i32::from_le_bytes)
         .unwrap_or(0)
 }
 

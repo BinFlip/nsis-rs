@@ -69,7 +69,8 @@ impl<'a> PeOverlay<'a> {
 
     /// Returns the overlay bytes (everything after the last PE section).
     pub fn overlay(&self) -> &'a [u8] {
-        &self.file[self.overlay_offset..]
+        // overlay_offset is validated < file.len() in `parse`.
+        self.file.get(self.overlay_offset..).unwrap_or(&[])
     }
 
     /// Returns the byte offset where the overlay begins in the file.

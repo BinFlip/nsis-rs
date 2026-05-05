@@ -80,7 +80,11 @@ impl<'a> Section<'a> {
             });
         }
         Ok(Self {
-            bytes: &data[..size],
+            bytes: data.get(..size).ok_or(Error::TooShort {
+                expected: size,
+                actual: data.len(),
+                context: "Section",
+            })?,
             is_unicode,
         })
     }
@@ -133,15 +137,15 @@ impl<'a> Section<'a> {
         if self.bytes.len() <= Self::BASE_SIZE {
             return None;
         }
-        let name_buf = &self.bytes[Self::BASE_SIZE..];
+        let name_buf = self.bytes.get(Self::BASE_SIZE..)?;
         if self.is_unicode {
             // UTF-16LE null-terminated
             let mut chars = Vec::new();
-            for i in (0..name_buf.len()).step_by(2) {
-                if i + 1 >= name_buf.len() {
+            for chunk in name_buf.chunks_exact(2) {
+                let Some(pair) = chunk.first_chunk::<2>() else {
                     break;
-                }
-                let ch = u16::from_le_bytes([name_buf[i], name_buf[i + 1]]);
+                };
+                let ch = u16::from_le_bytes(*pair);
                 if ch == 0 {
                     break;
                 }
@@ -155,7 +159,7 @@ impl<'a> Section<'a> {
                 .iter()
                 .position(|&b| b == 0)
                 .unwrap_or(name_buf.len());
-            let s = String::from_utf8_lossy(&name_buf[..end]).into_owned();
+            let s = String::from_utf8_lossy(name_buf.get(..end).unwrap_or(&[])).into_owned();
             if s.is_empty() { None } else { Some(s) }
         }
     }
@@ -195,6 +199,21 @@ impl<'a> Section<'a> {
     pub fn is_expanded(&self) -> bool {
         self.flags() & SF_EXPAND != 0
     }
+
+    /// Returns `true` if `entry_idx` falls within this section's code range.
+    ///
+    /// The range is `[code, code + code_size)`. Negative values for
+    /// [`code`](Self::code) or [`code_size`](Self::code_size) — which the
+    /// raw common header may report — are treated as zero, so a section
+    /// with no code never contains any entry.
+    pub fn contains_entry(&self, entry_idx: usize) -> bool {
+        let start = self.code().max(0) as usize;
+        let len = self.code_size().max(0) as usize;
+        let Some(end) = start.checked_add(len) else {
+            return false;
+        };
+        entry_idx >= start && entry_idx < end
+    }
 }
 
 /// Iterator over NSIS sections in a section block.
@@ -229,20 +248,16 @@ impl<'a> Iterator for SectionIter<'a> {
         if self.remaining == 0 {
             return None;
         }
-        self.remaining -= 1;
-        if self.offset >= self.data.len() {
+        self.remaining = self.remaining.saturating_sub(1);
+        let Some(slice) = self.data.get(self.offset..) else {
             return Some(Err(Error::TooShort {
-                expected: self.offset + self.section_size,
+                expected: self.offset.saturating_add(self.section_size),
                 actual: self.data.len(),
                 context: "Section",
             }));
-        }
-        let result = Section::parse(
-            &self.data[self.offset..],
-            self.section_size,
-            self.is_unicode,
-        );
-        self.offset += self.section_size;
+        };
+        let result = Section::parse(slice, self.section_size, self.is_unicode);
+        self.offset = self.offset.saturating_add(self.section_size);
         Some(result)
     }
 
@@ -340,5 +355,29 @@ mod tests {
     fn iterator_empty() {
         let iter = SectionIter::new(&[], 0, 24, false);
         assert_eq!(iter.count(), 0);
+    }
+
+    #[test]
+    fn contains_entry_basic() {
+        let buf = make_section(0, 0, 100, 5);
+        let s = Section::parse(&buf, 24, false).unwrap();
+        assert!(!s.contains_entry(99));
+        assert!(s.contains_entry(100));
+        assert!(s.contains_entry(104));
+        assert!(!s.contains_entry(105));
+    }
+
+    #[test]
+    fn contains_entry_empty_section() {
+        let buf = make_section(0, 0, 100, 0);
+        let s = Section::parse(&buf, 24, false).unwrap();
+        assert!(!s.contains_entry(100));
+    }
+
+    #[test]
+    fn contains_entry_negative_code_size() {
+        let buf = make_section(0, 0, 0, -1);
+        let s = Section::parse(&buf, 24, false).unwrap();
+        assert!(!s.contains_entry(0));
     }
 }

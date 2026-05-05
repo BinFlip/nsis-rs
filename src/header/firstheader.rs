@@ -87,7 +87,11 @@ impl<'a> FirstHeader<'a> {
             });
         }
 
-        let bytes = &data[..Self::SIZE];
+        let bytes = data.get(..Self::SIZE).ok_or(Error::TooShort {
+            expected: Self::SIZE,
+            actual: data.len(),
+            context: "FirstHeader",
+        })?;
         let header = Self { bytes };
 
         // Validate siginfo.

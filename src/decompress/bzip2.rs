@@ -26,6 +26,26 @@
 //!
 //! - NSIS source: `Source/bzip2/bzlib.h`, `decompress.c`, `huffman.c`
 //! - Original bzip2: Julian Seward, <http://www.bzip.org/>
+//!
+//! # Lint allowlist
+//!
+//! This module is a direct port of a vendored decompressor algorithm. All
+//! arithmetic and indexing operations in the inner Huffman / BWT loops are
+//! against fixed-size internal state arrays (`BZ_MAX_ALPHA_SIZE`,
+//! `BZ_N_GROUPS`, `MTFA_SIZE`, `BLOCK_SIZE`) and are guarded by explicit
+//! input-range checks at the block boundaries (origPtr, nGroups,
+//! nSelectors, code lengths). Wrapping every internal `+`/`<<`/`arr[i]`
+//! with `saturating_*` / `.get()` would obscure the algorithm without
+//! adding safety: any residual out-of-bounds index would still produce
+//! a controlled Rust panic rather than UB.
+//!
+//! To make sure such a panic never escapes into a downstream
+//! malware-analysis pipeline, the public entry point [`decompress_bzip2`]
+//! wraps the decoder in [`std::panic::catch_unwind`] and converts any
+//! captured panic into a [`DecompressionFailed`](Error::DecompressionFailed)
+//! error.
+
+#![allow(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
 
 use crate::error::Error;
 
@@ -240,6 +260,19 @@ struct HuffmanTables {
 /// Returns [`Error::DecompressionFailed`] with `method: "bzip2"` if the stream
 /// is malformed.
 pub fn decompress_bzip2(compressed: &[u8], max_output: usize) -> Result<Vec<u8>, Error> {
+    // Run the decoder under `catch_unwind` so any out-of-bounds index or
+    // arithmetic overflow inside the vendored algorithm surfaces as a clean
+    // `DecompressionFailed` error rather than aborting the calling worker.
+    // See the module-level "Lint allowlist" doc for context.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        decompress_bzip2_inner(compressed, max_output)
+    })) {
+        Ok(result) => result,
+        Err(_) => Err(fail("decoder panicked on malformed input")),
+    }
+}
+
+fn decompress_bzip2_inner(compressed: &[u8], max_output: usize) -> Result<Vec<u8>, Error> {
     if compressed.is_empty() {
         return Err(fail("empty input"));
     }
@@ -256,8 +289,7 @@ pub fn decompress_bzip2(compressed: &[u8], max_output: usize) -> Result<Vec<u8>,
         }
         if header != 0x31 {
             return Err(fail(&format!(
-                "invalid block header 0x{:02X} (expected 0x31 or 0x17)",
-                header
+                "invalid block header 0x{header:02X} (expected 0x31 or 0x17)"
             )));
         }
 
@@ -289,7 +321,7 @@ fn decompress_block(
     let orig_ptr = (b0 << 16) | (b1 << 8) | b2;
 
     if orig_ptr < 0 || orig_ptr > (10 + BLOCK_SIZE as i32) {
-        return Err(fail(&format!("origPtr out of range: {}", orig_ptr)));
+        return Err(fail(&format!("origPtr out of range: {orig_ptr}")));
     }
 
     // --- Receive the mapping table ---
@@ -328,7 +360,7 @@ fn decompress_block(
     // --- Read selectors ---
     let n_groups = reader.get_bits(3)?;
     if !(2..=6).contains(&n_groups) {
-        return Err(fail(&format!("nGroups out of range: {}", n_groups)));
+        return Err(fail(&format!("nGroups out of range: {n_groups}")));
     }
     let n_groups = n_groups as usize;
 
@@ -338,7 +370,7 @@ fn decompress_block(
     }
     let n_selectors = n_selectors as usize;
     if n_selectors > BZ_MAX_SELECTORS {
-        return Err(fail(&format!("nSelectors too large: {}", n_selectors)));
+        return Err(fail(&format!("nSelectors too large: {n_selectors}")));
     }
 
     let mut selector_mtf = vec![0u8; n_selectors];
@@ -383,7 +415,7 @@ fn decompress_block(
         for slot in table.iter_mut().take(alpha_size) {
             loop {
                 if !(1..=20).contains(&curr) {
-                    return Err(fail(&format!("code length out of range: {}", curr)));
+                    return Err(fail(&format!("code length out of range: {curr}")));
                 }
                 let bit = reader.get_bit()?;
                 if bit == 0 {
@@ -517,8 +549,7 @@ fn decompress_block(
     // --- Validate origPtr ---
     if orig_ptr < 0 || (orig_ptr as usize) >= nblock {
         return Err(fail(&format!(
-            "origPtr {} out of range for nblock {}",
-            orig_ptr, nblock
+            "origPtr {orig_ptr} out of range for nblock {nblock}"
         )));
     }
 
@@ -532,8 +563,8 @@ fn decompress_block(
     // Validate cftab: last entry must equal nblock.
     if cftab[256] != nblock as i32 {
         return Err(fail(&format!(
-            "cftab inconsistency: cftab[256]={} but nblock={}",
-            cftab[256], nblock
+            "cftab inconsistency: cftab[256]={} but nblock={nblock}",
+            cftab[256]
         )));
     }
 

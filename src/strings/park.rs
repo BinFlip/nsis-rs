@@ -39,11 +39,11 @@ pub fn is_park_special(ch: u16) -> bool {
 
 /// Reads a UTF-16LE code unit from the table at the given byte offset.
 fn read_u16(table: &[u8], offset: usize) -> Option<u16> {
-    if offset + 2 <= table.len() {
-        Some(u16::from_le_bytes([table[offset], table[offset + 1]]))
-    } else {
-        None
-    }
+    table
+        .get(offset..)
+        .and_then(|s| s.first_chunk::<2>())
+        .copied()
+        .map(u16::from_le_bytes)
 }
 
 /// Reads a Park-encoded NSIS string from the string table.
@@ -55,21 +55,20 @@ pub fn read_park_string(table: &[u8], offset: usize) -> Result<NsisString, Error
     let mut literal_chars: Vec<u16> = Vec::new();
     let mut pos = offset;
 
-    loop {
-        let Some(ch) = read_u16(table, pos) else {
-            break;
-        };
-
+    while let Some(ch) = read_u16(table, pos) {
         if ch == 0 {
             break;
         }
 
         if is_park_special(ch) {
             // Read the argument code unit.
-            let Some(n) = read_u16(table, pos + 2) else {
+            let Some(arg_pos) = pos.checked_add(2) else {
                 break;
             };
-            pos += 4; // skip the special code + argument
+            let Some(n) = read_u16(table, arg_pos) else {
+                break;
+            };
+            pos = pos.saturating_add(4); // skip the special code + argument
 
             if n == 0 {
                 break;
@@ -106,7 +105,7 @@ pub fn read_park_string(table: &[u8], offset: usize) -> Result<NsisString, Error
             }
         } else {
             literal_chars.push(ch);
-            pos += 2;
+            pos = pos.saturating_add(2);
         }
     }
 

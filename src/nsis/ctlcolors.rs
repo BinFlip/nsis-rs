@@ -55,7 +55,11 @@ impl<'a> CtlColors<'a> {
             });
         }
         Ok(Self {
-            bytes: &data[..Self::SIZE_32],
+            bytes: data.get(..Self::SIZE_32).ok_or(Error::TooShort {
+                expected: Self::SIZE_32,
+                actual: data.len(),
+                context: "CtlColors32",
+            })?,
             is_64bit: false,
         })
     }
@@ -74,7 +78,11 @@ impl<'a> CtlColors<'a> {
             });
         }
         Ok(Self {
-            bytes: &data[..Self::SIZE_64],
+            bytes: data.get(..Self::SIZE_64).ok_or(Error::TooShort {
+                expected: Self::SIZE_64,
+                actual: data.len(),
+                context: "CtlColors64",
+            })?,
             is_64bit: true,
         })
     }

@@ -40,7 +40,22 @@
 //! underlying buffer using little-endian byte decoding. The only heap
 //! allocations are for decompressed data and decoded strings.
 
-#![deny(missing_docs, unsafe_code)]
+// `missing_docs`, `unsafe_code`, plus the clippy panic-prevention set
+// (`unwrap_used`, `expect_used`, `panic`, `arithmetic_side_effects`,
+// `indexing_slicing`) are declared in `Cargo.toml` under `[lints]` so
+// they enforce on every build regardless of the consuming workspace.
+// nsis is used in malware-analysis pipelines where every input byte is
+// adversarial and the parser must not panic.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing
+    )
+)]
 
 pub mod addressmap;
 pub mod decompress;
@@ -55,7 +70,20 @@ mod util;
 
 pub use error::Error;
 pub use installer::{
-    ExecCommand, ExecIter, ExecOp, ExtractedFile, FileIter, NsisInstaller, PluginCall,
+    Callback, ExecCommand, ExecIter, ExecOp, ExtractedFile, FileIter, NsisInstaller, PluginCall,
     PluginCallIter, RegDelete, RegRead, RegValueType, RegWrite, RegistryIter, RegistryOp,
     ShellExecOp, Shortcut, ShortcutIter, Uninstaller, UninstallerIter,
+};
+pub use opcode::{
+    EW_ABORT, EW_ASSIGNVAR, EW_BRINGTOFRONT, EW_CALL, EW_CHDETAILSVIEW, EW_COPYFILES, EW_CREATEDIR,
+    EW_CREATESHORTCUT, EW_DELETEFILE, EW_DELREG, EW_EXECUTE, EW_EXTRACTFILE, EW_FCLOSE, EW_FGETS,
+    EW_FGETWS, EW_FINDCLOSE, EW_FINDFIRST, EW_FINDNEXT, EW_FINDWINDOW, EW_FOPEN, EW_FPUTS,
+    EW_FPUTWS, EW_FSEEK, EW_GETDLGITEM, EW_GETDLLVERSION, EW_GETFILETIME, EW_GETFLAG,
+    EW_GETFULLPATHNAME, EW_GETOSINFO, EW_GETTEMPFILENAME, EW_IFFILEEXISTS, EW_IFFLAG,
+    EW_INSTTYPESET, EW_INTCMP, EW_INTFMT, EW_INTOP, EW_INVALID_OPCODE, EW_ISWINDOW,
+    EW_LOADANDSETIMAGE, EW_LOCKWINDOW, EW_LOG, EW_MESSAGEBOX, EW_NOP, EW_PUSHPOP, EW_QUIT,
+    EW_READENVSTR, EW_READINISTR, EW_READREGSTR, EW_REBOOT, EW_REGENUM, EW_REGISTERDLL, EW_RENAME,
+    EW_RESERVEDOPCODE, EW_RET, EW_RMDIR, EW_SEARCHPATH, EW_SECTIONSET, EW_SENDMESSAGE,
+    EW_SETCTLCOLORS, EW_SETFILEATTRIBUTES, EW_SETFLAG, EW_SHELLEXEC, EW_SHOWWINDOW, EW_SLEEP,
+    EW_STRCMP, EW_STRLEN, EW_UPDATETEXT, EW_WRITEINI, EW_WRITEREG, EW_WRITEUNINSTALLER,
 };

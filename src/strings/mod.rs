@@ -27,6 +27,17 @@ pub enum StringEncoding {
     Park,
 }
 
+impl fmt::Display for StringEncoding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            StringEncoding::Ansi => "ANSI",
+            StringEncoding::Unicode => "Unicode",
+            StringEncoding::Park => "Park",
+        };
+        f.write_str(s)
+    }
+}
+
 /// Detects the string encoding from the first bytes of the string table.
 ///
 /// The three encoding variants are:
@@ -57,7 +68,7 @@ pub fn detect_encoding(string_table: &[u8]) -> StringEncoding {
     // ANSI tables start with a single 0x00 null byte for string index 0,
     // followed immediately by non-zero content. UTF-16LE tables start
     // with 0x00 0x00 (a 2-byte null).
-    if string_table[0] != 0 || string_table[1] != 0 {
+    if string_table.first().copied() != Some(0) || string_table.get(1).copied() != Some(0) {
         return StringEncoding::Ansi;
     }
 
@@ -65,7 +76,10 @@ pub fn detect_encoding(string_table: &[u8]) -> StringEncoding {
     // Scan for the first special code to distinguish NSIS 3 Unicode from Park.
     let limit = string_table.len().min(4096) & !1;
     for i in (2..limit).step_by(2) {
-        let ch = u16::from_le_bytes([string_table[i], string_table[i + 1]]);
+        let Some(pair) = string_table.get(i..).and_then(|s| s.first_chunk::<2>()) else {
+            break;
+        };
+        let ch = u16::from_le_bytes(*pair);
         if ch == 0 {
             continue;
         }
@@ -299,10 +313,10 @@ static VARIABLE_NAMES: [&str; 32] = [
 ///
 /// Source: 7-Zip `NsisIn.cpp` `GetVar2`, `state.h`.
 pub fn variable_name(index: u16) -> std::borrow::Cow<'static, str> {
-    if (index as usize) < VARIABLE_NAMES.len() {
-        std::borrow::Cow::Borrowed(VARIABLE_NAMES[index as usize])
+    if let Some(name) = VARIABLE_NAMES.get(index as usize) {
+        std::borrow::Cow::Borrowed(name)
     } else {
-        std::borrow::Cow::Owned(format!("$_{}_", index - NUM_INTERNAL_VARS))
+        std::borrow::Cow::Owned(format!("$_{}_", index.saturating_sub(NUM_INTERNAL_VARS)))
     }
 }
 

@@ -119,7 +119,11 @@ impl<'a> Page<'a> {
             });
         }
         Ok(Self {
-            bytes: &data[..Self::SIZE],
+            bytes: data.get(..Self::SIZE).ok_or(Error::TooShort {
+                expected: Self::SIZE,
+                actual: data.len(),
+                context: "Page",
+            })?,
         })
     }
 
@@ -233,9 +237,10 @@ impl<'a> Iterator for PageIter<'a> {
         if self.remaining == 0 {
             return None;
         }
-        self.remaining -= 1;
-        let result = Page::parse(&self.data[self.offset..]);
-        self.offset += Page::SIZE;
+        self.remaining = self.remaining.saturating_sub(1);
+        let slice = self.data.get(self.offset..).unwrap_or(&[]);
+        let result = Page::parse(slice);
+        self.offset = self.offset.saturating_add(Page::SIZE);
         Some(result)
     }
 

@@ -37,6 +37,8 @@
 //! }
 //! ```
 
+use core::fmt;
+
 use crate::{
     decompress::{self, CompressionMode},
     error::Error,
@@ -89,6 +91,19 @@ pub enum RegValueType {
     MultiStr,
     /// Unknown or unrecognized registry value type.
     Unknown(i32),
+}
+
+impl fmt::Display for RegValueType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RegValueType::Str => f.write_str("REG_SZ"),
+            RegValueType::ExpandStr => f.write_str("REG_EXPAND_SZ"),
+            RegValueType::Bin => f.write_str("REG_BINARY"),
+            RegValueType::Dword => f.write_str("REG_DWORD"),
+            RegValueType::MultiStr => f.write_str("REG_MULTI_SZ"),
+            RegValueType::Unknown(n) => write!(f, "REG_UNKNOWN({n})"),
+        }
+    }
 }
 
 impl RegValueType {
@@ -546,19 +561,22 @@ impl<'a> Uninstaller<'a> {
         let Some(overlay_offset) = self.overlay_offset() else {
             return &[];
         };
-        if overlay_offset + 4 > source.len() {
-            return &[];
-        }
-        let Ok((_, size)) = decompress::read_length_prefix(&source[overlay_offset..]) else {
+        let Some(slice) = source.get(overlay_offset..) else {
             return &[];
         };
-        let start = overlay_offset + 4;
-        let end = start + size as usize;
-        if end <= source.len() {
-            &source[start..end]
-        } else {
-            &[]
+        if slice.len() < 4 {
+            return &[];
         }
+        let Ok((_, size)) = decompress::read_length_prefix(slice) else {
+            return &[];
+        };
+        let Some(start) = overlay_offset.checked_add(4) else {
+            return &[];
+        };
+        let Some(end) = start.checked_add(size as usize) else {
+            return &[];
+        };
+        source.get(start..end).unwrap_or(&[])
     }
 
     /// Decompresses the uninstaller stub and returns its content.
@@ -575,35 +593,45 @@ impl<'a> Uninstaller<'a> {
             context: "uninstaller icon data length prefix",
         })?;
 
-        if overlay_offset + 4 > source.len() {
+        let slice = source.get(overlay_offset..).ok_or(Error::TooShort {
+            expected: overlay_offset.saturating_add(4),
+            actual: source.len(),
+            context: "uninstaller overlay length prefix",
+        })?;
+        if slice.len() < 4 {
             return Err(Error::TooShort {
-                expected: overlay_offset + 4,
+                expected: overlay_offset.saturating_add(4),
                 actual: source.len(),
                 context: "uninstaller overlay length prefix",
             });
         }
-        let (is_compressed, size) = decompress::read_length_prefix(&source[overlay_offset..])
-            .map_err(|_| Error::TooShort {
+        let (is_compressed, size) =
+            decompress::read_length_prefix(slice).map_err(|_| Error::TooShort {
                 expected: 4,
                 actual: 0,
                 context: "uninstaller overlay length prefix",
             })?;
 
-        let start = overlay_offset + 4;
-        let end = start + size as usize;
-        if end > source.len() {
-            return Err(Error::TooShort {
-                expected: end,
-                actual: source.len(),
-                context: "uninstaller overlay payload",
-            });
-        }
-        let payload = &source[start..end];
+        let start = overlay_offset.checked_add(4).ok_or(Error::TooShort {
+            expected: usize::MAX,
+            actual: source.len(),
+            context: "uninstaller overlay overflow",
+        })?;
+        let end = start.checked_add(size as usize).ok_or(Error::TooShort {
+            expected: usize::MAX,
+            actual: source.len(),
+            context: "uninstaller overlay overflow",
+        })?;
+        let payload = source.get(start..end).ok_or(Error::TooShort {
+            expected: end,
+            actual: source.len(),
+            context: "uninstaller overlay payload",
+        })?;
 
         let overlay_data = if !is_compressed {
             payload.to_vec()
         } else {
-            let max_output = (size as usize * 10).max(64 * 1024 * 1024);
+            let max_output = (size as usize).saturating_mul(10).max(64 * 1024 * 1024);
             decompress::decompress_block(
                 payload,
                 self.installer.compression(),
@@ -614,10 +642,12 @@ impl<'a> Uninstaller<'a> {
 
         // Prepend the PE stub from the original file.
         let pe_stub_size = self.installer.first_header_file_offset();
-        let pe_stub =
-            &self.installer.file_data()[..pe_stub_size.min(self.installer.file_data().len())];
+        let file_data = self.installer.file_data();
+        let pe_stub = file_data
+            .get(..pe_stub_size.min(file_data.len()))
+            .unwrap_or(&[]);
 
-        let mut result = Vec::with_capacity(pe_stub.len() + overlay_data.len());
+        let mut result = Vec::with_capacity(pe_stub.len().saturating_add(overlay_data.len()));
         result.extend_from_slice(pe_stub);
         result.extend_from_slice(&overlay_data);
         Ok(result)
@@ -633,13 +663,15 @@ impl<'a> Uninstaller<'a> {
     fn overlay_offset(&self) -> Option<usize> {
         let source = self.data_source();
         let offset = self.source_offset();
-        if offset + 4 > source.len() {
+        let slice = source.get(offset..)?;
+        if slice.len() < 4 {
             return None;
         }
-        let (_, icon_size) = decompress::read_length_prefix(&source[offset..]).ok()?;
+        let (_, icon_size) = decompress::read_length_prefix(slice).ok()?;
         // Skip: 4-byte prefix + icon data.
-        let after_icon = offset + 4 + icon_size as usize;
-        if after_icon + 4 <= source.len() {
+        let after_icon = offset.checked_add(4)?.checked_add(icon_size as usize)?;
+        let after_with_prefix = after_icon.checked_add(4)?;
+        if after_with_prefix <= source.len() {
             Some(after_icon)
         } else {
             None
@@ -658,7 +690,9 @@ impl<'a> Uninstaller<'a> {
         if self.installer.compression_mode() == CompressionMode::Solid {
             self.data_offset().max(0) as usize
         } else {
-            self.installer.data_block_offset() + self.data_offset().max(0) as usize
+            self.installer
+                .data_block_offset()
+                .saturating_add(self.data_offset().max(0) as usize)
         }
     }
 }

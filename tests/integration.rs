@@ -3,6 +3,14 @@
 //! All test fixtures are built from `.nsi` scripts in `tests/build_fixtures/`
 //! using `makensis` and cover specific compression/encoding/feature combinations.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing
+)]
+
 use nsis::NsisInstaller;
 
 fn parse_fixture(name: &str) -> NsisInstaller<'static> {
@@ -222,6 +230,17 @@ fn opcode_resolution() {
         }
     }
     assert!(resolved > 0, "no opcodes resolved");
+}
+
+#[test]
+fn opcode_constants_are_exported_at_crate_root() {
+    let exported = [
+        nsis::EW_INVALID_OPCODE,
+        nsis::EW_RET,
+        nsis::EW_CALL,
+        nsis::EW_FGETWS,
+    ];
+    assert_eq!(exported, [0, 1, 5, 70]);
 }
 
 #[test]

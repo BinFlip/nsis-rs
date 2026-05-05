@@ -54,7 +54,11 @@ impl<'a> LangTable<'a> {
             });
         }
         Ok(Self {
-            bytes: &data[..size],
+            bytes: data.get(..size).ok_or(Error::TooShort {
+                expected: size,
+                actual: data.len(),
+                context: "LangTable",
+            })?,
             entry_size: size,
         })
     }
@@ -75,8 +79,9 @@ impl<'a> LangTable<'a> {
     ///
     /// Returns `None` if the index is out of range for this language table size.
     pub fn string_ptr(&self, index: usize) -> Option<i32> {
-        let offset = Self::MIN_SIZE + index * 4;
-        if offset + 4 <= self.entry_size {
+        let offset = index.checked_mul(4)?.checked_add(Self::MIN_SIZE)?;
+        let end = offset.checked_add(4)?;
+        if end <= self.entry_size {
             Some(read_i32_le(self.bytes, offset))
         } else {
             None
@@ -126,16 +131,16 @@ impl<'a> Iterator for LangTableIter<'a> {
         if self.remaining == 0 {
             return None;
         }
-        self.remaining -= 1;
-        if self.offset >= self.data.len() {
+        self.remaining = self.remaining.saturating_sub(1);
+        let Some(slice) = self.data.get(self.offset..) else {
             return Some(Err(Error::TooShort {
-                expected: self.offset + self.entry_size,
+                expected: self.offset.saturating_add(self.entry_size),
                 actual: self.data.len(),
                 context: "LangTable",
             }));
-        }
-        let result = LangTable::parse(&self.data[self.offset..], self.entry_size);
-        self.offset += self.entry_size;
+        };
+        let result = LangTable::parse(slice, self.entry_size);
+        self.offset = self.offset.saturating_add(self.entry_size);
         Some(result)
     }
 

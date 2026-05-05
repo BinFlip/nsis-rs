@@ -60,9 +60,7 @@ pub fn read_ansi_string(table: &[u8], offset: usize) -> Result<NsisString, Error
     let mut literal = String::new();
     let mut pos = offset;
 
-    while pos < table.len() {
-        let b = table[pos];
-
+    while let Some(&b) = table.get(pos) {
         if b == 0 {
             break;
         }
@@ -72,11 +70,11 @@ pub fn read_ansi_string(table: &[u8], offset: usize) -> Result<NsisString, Error
         if code != AnsiCode::Literal {
             if code == AnsiCode::Skip {
                 // Next byte is a literal character (no flush needed).
-                pos += 1;
-                if pos < table.len() {
-                    literal.push(table[pos] as char);
+                pos = pos.saturating_add(1);
+                if let Some(&next) = table.get(pos) {
+                    literal.push(next as char);
                 }
-                pos += 1;
+                pos = pos.saturating_add(1);
                 continue;
             }
 
@@ -87,11 +85,14 @@ pub fn read_ansi_string(table: &[u8], offset: usize) -> Result<NsisString, Error
             }
 
             // Read the 2-byte coded short.
-            if pos + 2 >= table.len() {
+            let (Some(p1), Some(p2)) = (pos.checked_add(1), pos.checked_add(2)) else {
                 break;
-            }
-            let val = decode_short(table[pos + 1], table[pos + 2]);
-            pos += 3;
+            };
+            let (Some(&hi), Some(&lo)) = (table.get(p1), table.get(p2)) else {
+                break;
+            };
+            let val = decode_short(hi, lo);
+            pos = pos.saturating_add(3);
 
             match code {
                 AnsiCode::Var => segments.push(StringSegment::Variable(val)),
@@ -101,7 +102,7 @@ pub fn read_ansi_string(table: &[u8], offset: usize) -> Result<NsisString, Error
             }
         } else {
             literal.push(b as char);
-            pos += 1;
+            pos = pos.saturating_add(1);
         }
     }
 

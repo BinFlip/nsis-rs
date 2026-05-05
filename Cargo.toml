@@ -1,15 +1,31 @@
 [package]
 name = "nsis"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 authors = ["Johann Kempter <admin@binflip.rs>"]
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Parse and inspect NSIS installer binaries"
 license = "Apache-2.0"
 repository = "https://github.com/BinFlip/nsis-rs"
 readme = "README.md"
 keywords = ["nsis", "installer", "parser", "reverse-engineering", "binary-analysis"]
 categories = ["parser-implementations"]
+
+# nsis is used in malware-analysis pipelines where every input byte is
+# adversarial. These lints prevent the parser from panicking on malformed
+# input. The `cfg_attr(test, allow(...))` escape hatch in `src/lib.rs`
+# lets tests still use `unwrap`/`expect`/`panic` for terseness.
+# `unsafe_code` was already denied in `src/lib.rs`; preserved here.
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+arithmetic_side_effects = "deny"
+indexing_slicing = "deny"
 
 [dependencies]
 goblin = "0.10.5"

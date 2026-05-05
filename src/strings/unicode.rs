@@ -20,11 +20,11 @@ const NS_SKIP_CODE_W: u16 = 0x0004;
 
 /// Reads a UTF-16LE code unit from the table at the given byte offset.
 fn read_u16(table: &[u8], offset: usize) -> Option<u16> {
-    if offset + 2 <= table.len() {
-        Some(u16::from_le_bytes([table[offset], table[offset + 1]]))
-    } else {
-        None
-    }
+    table
+        .get(offset..)
+        .and_then(|s| s.first_chunk::<2>())
+        .copied()
+        .map(u16::from_le_bytes)
 }
 
 /// Decodes a 14-bit value from a single NSIS 3 Unicode argument u16.
@@ -47,11 +47,7 @@ pub fn read_unicode_string(table: &[u8], offset: usize) -> Result<NsisString, Er
     let mut literal_chars: Vec<u16> = Vec::new();
     let mut pos = offset;
 
-    loop {
-        let Some(ch) = read_u16(table, pos) else {
-            break;
-        };
-
+    while let Some(ch) = read_u16(table, pos) {
         if ch == 0 {
             break;
         }
@@ -59,11 +55,11 @@ pub fn read_unicode_string(table: &[u8], offset: usize) -> Result<NsisString, Er
         if (NS_LANG_CODE_W..=NS_SKIP_CODE_W).contains(&ch) {
             if ch == NS_SKIP_CODE_W {
                 // Next code unit is literal.
-                pos += 2;
+                pos = pos.saturating_add(2);
                 if let Some(next) = read_u16(table, pos) {
                     literal_chars.push(next);
                 }
-                pos += 2;
+                pos = pos.saturating_add(2);
                 continue;
             }
 
@@ -75,10 +71,13 @@ pub fn read_unicode_string(table: &[u8], offset: usize) -> Result<NsisString, Er
             }
 
             // Read ONE argument u16.
-            let Some(arg) = read_u16(table, pos + 2) else {
+            let Some(arg_pos) = pos.checked_add(2) else {
                 break;
             };
-            pos += 4; // special code (2) + argument (2)
+            let Some(arg) = read_u16(table, arg_pos) else {
+                break;
+            };
+            pos = pos.saturating_add(4); // special code (2) + argument (2)
 
             match ch {
                 NS_VAR_CODE_W => {
@@ -100,7 +99,7 @@ pub fn read_unicode_string(table: &[u8], offset: usize) -> Result<NsisString, Er
             }
         } else {
             literal_chars.push(ch);
-            pos += 2;
+            pos = pos.saturating_add(2);
         }
     }
 

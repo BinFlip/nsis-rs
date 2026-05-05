@@ -14,7 +14,7 @@ use crate::{
     error::Error,
     header::{
         NsisVersionHint,
-        blockheader::{BLOCKS_NUM, BlockHeader, BlockType},
+        blockheader::{BLOCKS_NUM, BlockHeader, BlockType, EMPTY_BLOCK},
     },
     util::{read_i32_le, read_u32_le},
 };
@@ -86,8 +86,20 @@ impl<'a> CommonHeader<'a> {
         let zero_block = BlockHeader::parse(&[0u8; 8])?;
         let mut blocks: [BlockHeader<'a>; BLOCKS_NUM] = [zero_block; BLOCKS_NUM];
         for (i, block) in blocks.iter_mut().enumerate() {
-            let block_offset = 4 + i * BlockHeader::SIZE;
-            *block = BlockHeader::parse(&data[block_offset..])?;
+            let block_offset = i
+                .checked_mul(BlockHeader::SIZE)
+                .and_then(|n| n.checked_add(4))
+                .ok_or(Error::TooShort {
+                    expected: COMMON_HEADER_MIN_SIZE,
+                    actual: data.len(),
+                    context: "CommonHeader",
+                })?;
+            let slice = data.get(block_offset..).ok_or(Error::TooShort {
+                expected: COMMON_HEADER_MIN_SIZE,
+                actual: data.len(),
+                context: "CommonHeader",
+            })?;
+            *block = BlockHeader::parse(slice)?;
         }
 
         // Validate block offsets are within bounds (except Data block which may
@@ -120,9 +132,16 @@ impl<'a> CommonHeader<'a> {
     }
 
     /// Returns the block header for the given block type.
+    ///
+    /// The `BlockType` enum discriminants are always within `0..BLOCKS_NUM`,
+    /// so this lookup never returns `None` for a well-formed `BlockType`;
+    /// the `.first()` fallback is purely defensive.
     #[inline]
     pub fn block(&self, bt: BlockType) -> &BlockHeader<'a> {
-        &self.blocks[bt as usize]
+        self.blocks
+            .get(bt as usize)
+            .or_else(|| self.blocks.first())
+            .unwrap_or(&EMPTY_BLOCK)
     }
 
     /// Returns all 8 block headers.
@@ -280,7 +299,10 @@ impl<'a> CommonHeader<'a> {
                 offset: bh.offset(),
             });
         }
-        Ok(&header_data[offset..])
+        header_data.get(offset..).ok_or(Error::InvalidBlockOffset {
+            block: bt.name(),
+            offset: bh.offset(),
+        })
     }
 
     /// Returns `true` if the installer uses silent mode.

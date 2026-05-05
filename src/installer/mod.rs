@@ -10,6 +10,7 @@
 //! shortcuts, and embedded uninstaller stubs.
 
 pub mod analysis;
+pub mod callback;
 mod files;
 mod nsisinstaller;
 
@@ -18,5 +19,6 @@ pub use analysis::{
     RegWrite, RegistryIter, RegistryOp, ShellExecOp, Shortcut, ShortcutIter, Uninstaller,
     UninstallerIter,
 };
+pub use callback::Callback;
 pub use files::{ExtractedFile, FileIter};
 pub use nsisinstaller::NsisInstaller;

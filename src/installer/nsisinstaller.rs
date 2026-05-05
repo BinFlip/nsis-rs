@@ -10,6 +10,7 @@ use crate::{
     },
     installer::{
         analysis::{ExecIter, PluginCallIter, RegistryIter, ShortcutIter, UninstallerIter},
+        callback::Callback,
         files::FileIter,
     },
     nsis::{
@@ -111,19 +112,37 @@ impl<'a> NsisInstaller<'a> {
 
         // Step 2: Scan for the FirstHeader.
         let (fh_overlay_offset, first_header) = header::scan_for_first_header(overlay)?;
-        let first_header_file_offset = overlay_file_offset + fh_overlay_offset;
+        let first_header_file_offset =
+            overlay_file_offset
+                .checked_add(fh_overlay_offset)
+                .ok_or(Error::TooShort {
+                    expected: usize::MAX,
+                    actual: overlay.len(),
+                    context: "first header file offset overflow",
+                })?;
         let is_legacy = first_header.is_legacy();
 
         // Data after the FirstHeader.
-        let after_fh_start = fh_overlay_offset + FirstHeader::SIZE;
-        if after_fh_start >= overlay.len() {
+        let after_fh_start =
+            fh_overlay_offset
+                .checked_add(FirstHeader::SIZE)
+                .ok_or(Error::TooShort {
+                    expected: usize::MAX,
+                    actual: overlay.len(),
+                    context: "first header overflow",
+                })?;
+        let after_fh = overlay.get(after_fh_start..).ok_or(Error::TooShort {
+            expected: after_fh_start.saturating_add(1),
+            actual: overlay.len(),
+            context: "data after FirstHeader",
+        })?;
+        if after_fh.is_empty() {
             return Err(Error::TooShort {
-                expected: after_fh_start + 1,
+                expected: after_fh_start.saturating_add(1),
                 actual: overlay.len(),
                 context: "data after FirstHeader",
             });
         }
-        let after_fh = &overlay[after_fh_start..];
 
         // Step 3: Decompress the header block.
         let expected_size = first_header.length_of_header() as usize;
@@ -135,8 +154,7 @@ impl<'a> NsisInstaller<'a> {
         let (blocks, common_flags, langtable_size, callbacks) = {
             let common_header = CommonHeader::parse(&header_data, NsisVersionHint::Unknown)?;
             let mut blocks = [(0u32, 0i32); 8];
-            for (i, block) in blocks.iter_mut().enumerate() {
-                let bh = &common_header.blocks()[i];
+            for (block, bh) in blocks.iter_mut().zip(common_header.blocks().iter()) {
                 *block = (bh.offset(), bh.num());
             }
             let callbacks = [
@@ -160,29 +178,42 @@ impl<'a> NsisInstaller<'a> {
         };
 
         // Compute section size from block header gaps (7-Zip NsisIn.cpp line 5260).
-        let sec_offset = blocks[BlockType::Sections as usize].0 as usize;
-        let sec_count = blocks[BlockType::Sections as usize].1.max(0) as usize;
-        let ent_offset = blocks[BlockType::Entries as usize].0 as usize;
-        let section_size = if sec_count > 0 && ent_offset > sec_offset {
-            (ent_offset - sec_offset) / sec_count
+        let (sec_off_raw, sec_count_raw) = blocks
+            .get(BlockType::Sections as usize)
+            .copied()
+            .unwrap_or((0, 0));
+        let (ent_off_raw, ent_count_raw) = blocks
+            .get(BlockType::Entries as usize)
+            .copied()
+            .unwrap_or((0, 0));
+        let sec_offset = sec_off_raw as usize;
+        let sec_count = sec_count_raw.max(0) as usize;
+        let ent_offset = ent_off_raw as usize;
+        let section_size = if ent_offset > sec_offset {
+            ent_offset
+                .saturating_sub(sec_offset)
+                .checked_div(sec_count)
+                .unwrap_or(Section::BASE_SIZE)
         } else {
             Section::BASE_SIZE
         };
 
         // Step 5: Detect string encoding and version.
-        let string_block_offset = blocks[BlockType::Strings as usize].0 as usize;
-        let encoding = if string_block_offset < header_data.len() {
-            strings::detect_encoding(&header_data[string_block_offset..])
-        } else {
-            StringEncoding::Ansi
+        let string_block_offset = blocks
+            .get(BlockType::Strings as usize)
+            .copied()
+            .unwrap_or((0, 0))
+            .0 as usize;
+        let encoding = match header_data.get(string_block_offset..) {
+            Some(slice) if !slice.is_empty() => strings::detect_encoding(slice),
+            _ => StringEncoding::Ansi,
         };
 
         let version = NsisVersion::detect(encoding, is_legacy);
 
         // Step 5b: Detect Park sub-version by scanning entries.
         let park_sub = if version == NsisVersion::Park {
-            let ent_offset = blocks[BlockType::Entries as usize].0 as usize;
-            let ent_count = blocks[BlockType::Entries as usize].1.max(0) as usize;
+            let ent_count = ent_count_raw.max(0) as usize;
             Some(opcode::detect_park_sub_version(
                 &header_data,
                 ent_offset,
@@ -212,9 +243,13 @@ impl<'a> NsisInstaller<'a> {
             } else {
                 nsis_data_len
             };
-            let compressed_data = &after_fh[..stream_len.min(after_fh.len())];
+            let compressed_data = after_fh
+                .get(..stream_len.min(after_fh.len()))
+                .unwrap_or(after_fh);
 
-            let max_decompressed = nsis_data_len.max(expected_size * 10).max(64 * 1024 * 1024);
+            let max_decompressed = nsis_data_len
+                .max(expected_size.saturating_mul(10))
+                .max(64 * 1024 * 1024);
 
             // Decompress the full stream. If this fails, file extraction won't
             // work but header parsing still succeeds — we degrade gracefully.
@@ -224,18 +259,19 @@ impl<'a> NsisInstaller<'a> {
 
             // The first 4 bytes are the header length prefix, then header_data.
             // File data starts after: 4 + header_data.len()
-            let file_data_start = 4 + header_data.len();
-            let solid_file_data = if file_data_start < full_stream.len() {
-                full_stream[file_data_start..].to_vec()
-            } else {
-                Vec::new()
-            };
+            let file_data_start = header_data.len().saturating_add(4);
+            let solid_file_data = full_stream
+                .get(file_data_start..)
+                .map(<[u8]>::to_vec)
+                .unwrap_or_default();
 
             (0, solid_file_data)
         } else {
             // In non-solid mode, the data block follows the compressed header.
             // `header_compressed_size` already includes the 4-byte length prefix.
-            let offset = first_header_file_offset + FirstHeader::SIZE + header_compressed_size;
+            let offset = first_header_file_offset
+                .saturating_add(FirstHeader::SIZE)
+                .saturating_add(header_compressed_size);
             (offset, Vec::new())
         };
 
@@ -320,55 +356,71 @@ impl<'a> NsisInstaller<'a> {
         self.file
     }
 
+    /// Returns the (offset, count) pair for a block, or `(0, 0)` if missing.
+    fn block_info(&self, bt: BlockType) -> (u32, i32) {
+        self.blocks.get(bt as usize).copied().unwrap_or((0, 0))
+    }
+
+    /// Returns the slice of `header_data` starting at the given block's offset.
+    fn block_data(&self, bt: BlockType) -> &[u8] {
+        let (offset, _) = self.block_info(bt);
+        self.header_data.get(offset as usize..).unwrap_or(&[])
+    }
+
     /// Returns the number of sections.
     #[inline]
     pub fn section_count(&self) -> usize {
-        self.blocks[BlockType::Sections as usize].1.max(0) as usize
+        self.block_info(BlockType::Sections).1.max(0) as usize
     }
 
     /// Returns the number of entries (instructions).
     #[inline]
     pub fn entry_count(&self) -> usize {
-        self.blocks[BlockType::Entries as usize].1.max(0) as usize
+        self.block_info(BlockType::Entries).1.max(0) as usize
     }
 
     /// Returns the number of pages.
     #[inline]
     pub fn page_count(&self) -> usize {
-        self.blocks[BlockType::Pages as usize].1.max(0) as usize
+        self.block_info(BlockType::Pages).1.max(0) as usize
     }
 
     /// Returns an iterator over install sections.
     pub fn sections(&self) -> SectionIter<'_> {
-        let (offset, count) = self.blocks[BlockType::Sections as usize];
-        let data = &self.header_data[offset as usize..];
+        let (_, count) = self.block_info(BlockType::Sections);
         let is_unicode = matches!(
             self.encoding,
             StringEncoding::Unicode | StringEncoding::Park
         );
-        SectionIter::new(data, count.max(0) as usize, self.section_size, is_unicode)
+        SectionIter::new(
+            self.block_data(BlockType::Sections),
+            count.max(0) as usize,
+            self.section_size,
+            is_unicode,
+        )
     }
 
     /// Returns an iterator over bytecode entries (instructions).
     pub fn entries(&self) -> EntryIter<'_> {
-        let (offset, count) = self.blocks[BlockType::Entries as usize];
-        let data = &self.header_data[offset as usize..];
-        EntryIter::new(data, count.max(0) as usize)
+        let (_, count) = self.block_info(BlockType::Entries);
+        EntryIter::new(self.block_data(BlockType::Entries), count.max(0) as usize)
     }
 
     /// Returns an iterator over installer pages.
     pub fn pages(&self) -> PageIter<'_> {
-        let (offset, count) = self.blocks[BlockType::Pages as usize];
-        let data = &self.header_data[offset as usize..];
-        PageIter::new(data, count.max(0) as usize)
+        let (_, count) = self.block_info(BlockType::Pages);
+        PageIter::new(self.block_data(BlockType::Pages), count.max(0) as usize)
     }
 
     /// Returns an iterator over language tables.
     pub fn lang_tables(&self) -> LangTableIter<'_> {
-        let (offset, count) = self.blocks[BlockType::LangTables as usize];
-        let data = &self.header_data[offset as usize..];
+        let (_, count) = self.block_info(BlockType::LangTables);
         let entry_size = self.langtable_size.max(8) as usize;
-        LangTableIter::new(data, count.max(0) as usize, entry_size)
+        LangTableIter::new(
+            self.block_data(BlockType::LangTables),
+            count.max(0) as usize,
+            entry_size,
+        )
     }
 
     /// Reads and decodes a string from the string table at the given offset.
@@ -383,7 +435,7 @@ impl<'a> NsisInstaller<'a> {
                 segments: Vec::new(),
             });
         }
-        let string_block_offset = self.blocks[BlockType::Strings as usize].0 as usize;
+        let string_block_offset = self.block_info(BlockType::Strings).0 as usize;
         // name_ptr and other string offsets are TCHAR indices, not byte offsets.
         // For Unicode (UTF-16LE), multiply by 2 to get the byte offset.
         // Both Unicode and Park are UTF-16LE (char_size = 2).
@@ -391,7 +443,8 @@ impl<'a> NsisInstaller<'a> {
             StringEncoding::Unicode | StringEncoding::Park => 2,
             StringEncoding::Ansi => 1,
         };
-        let abs_offset = string_block_offset + (offset as usize) * char_size;
+        let abs_offset =
+            string_block_offset.saturating_add((offset as usize).saturating_mul(char_size));
         strings::read_nsis_string(&self.header_data, abs_offset, self.encoding)
     }
 
@@ -412,9 +465,8 @@ impl<'a> NsisInstaller<'a> {
     /// }
     /// ```
     pub fn files(&self) -> FileIter<'_> {
-        let (offset, count) = self.blocks[BlockType::Entries as usize];
-        let data = &self.header_data[offset as usize..];
-        let entries = EntryIter::new(data, count.max(0) as usize);
+        let (_, count) = self.block_info(BlockType::Entries);
+        let entries = EntryIter::new(self.block_data(BlockType::Entries), count.max(0) as usize);
         FileIter::new(self, entries)
     }
 
@@ -428,10 +480,10 @@ impl<'a> NsisInstaller<'a> {
         if raw < 0 {
             return raw;
         }
-        if self.version == NsisVersion::Park {
-            if let Some(sub) = self.park_sub {
-                return opcode::normalize_park_opcode(raw as u32, sub) as i32;
-            }
+        if self.version == NsisVersion::Park
+            && let Some(sub) = self.park_sub
+        {
+            return opcode::normalize_park_opcode(raw as u32, sub) as i32;
         }
         raw
     }
@@ -467,14 +519,18 @@ impl<'a> NsisInstaller<'a> {
     /// Uses the section's `code` (start index) and `code_size` (count) to
     /// slice the entries block.
     pub fn section_entries(&self, section: &Section<'_>) -> EntryIter<'_> {
-        let (block_offset, _) = self.blocks[BlockType::Entries as usize];
+        let (block_offset, _) = self.block_info(BlockType::Entries);
         let code = section.code().max(0) as usize;
         let count = section.code_size().max(0) as usize;
-        let byte_offset = block_offset as usize + code * Entry::SIZE;
-        if byte_offset < self.header_data.len() {
-            EntryIter::new(&self.header_data[byte_offset..], count)
-        } else {
-            EntryIter::new(&[], 0)
+        let Some(byte_offset) = code
+            .checked_mul(Entry::SIZE)
+            .and_then(|n| n.checked_add(block_offset as usize))
+        else {
+            return EntryIter::new(&[], 0);
+        };
+        match self.header_data.get(byte_offset..) {
+            Some(slice) => EntryIter::new(slice, count),
+            None => EntryIter::new(&[], 0),
         }
     }
 
@@ -485,7 +541,7 @@ impl<'a> NsisInstaller<'a> {
     /// perform early payload decryption, memory allocation, and anti-analysis
     /// checks before any user interaction.
     pub fn on_init(&self) -> Option<usize> {
-        Self::callback_index(self.callbacks[0])
+        Self::callback_index(self.callbacks.first().copied().unwrap_or(-1))
     }
 
     /// Returns the entry index for the `.onInstSuccess` callback.
@@ -561,6 +617,31 @@ impl<'a> NsisInstaller<'a> {
         Self::callback_index(self.callbacks[9])
     }
 
+    /// Returns `true` if the section at `section_idx` contains `entry_idx`
+    /// in its code range.
+    ///
+    /// Returns `false` if `section_idx` is out of range or the section
+    /// fails to parse. Equivalent to `self.sections().nth(section_idx)`
+    /// followed by [`Section::contains_entry`], but without exposing the
+    /// `Result<Section, _>` and signed-arithmetic boundary handling to
+    /// callers.
+    pub fn section_contains_entry(&self, section_idx: usize, entry_idx: usize) -> bool {
+        match self.sections().nth(section_idx) {
+            Some(Ok(section)) => section.contains_entry(entry_idx),
+            _ => false,
+        }
+    }
+
+    /// Returns the entry index for a given [`Callback`] slot.
+    ///
+    /// Equivalent to the named `on_*` accessors but indexed by the
+    /// [`Callback`] enum, which lets callers iterate over
+    /// [`Callback::ALL`] without hardcoding callback names.
+    pub fn callback(&self, cb: Callback) -> Option<usize> {
+        let raw = self.callbacks.get(cb.index()).copied().unwrap_or(-1);
+        Self::callback_index(raw)
+    }
+
     /// Returns an iterator over plugin DLL calls in the script.
     ///
     /// Yields [`crate::installer::analysis::PluginCall`] for each `EW_REGISTERDLL` entry.
@@ -605,7 +686,7 @@ impl<'a> NsisInstaller<'a> {
     }
 
     fn make_entry_iter(&self) -> EntryIter<'_> {
-        let (offset, count) = self.blocks[BlockType::Entries as usize];
-        EntryIter::new(&self.header_data[offset as usize..], count.max(0) as usize)
+        let (_, count) = self.block_info(BlockType::Entries);
+        EntryIter::new(self.block_data(BlockType::Entries), count.max(0) as usize)
     }
 }

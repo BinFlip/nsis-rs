@@ -112,13 +112,13 @@ impl<'a> ExtractedFile<'a> {
             return &[];
         };
         let source = self.data_source();
-        let offset = self.source_offset() + 4; // skip length prefix
-        let end = offset + size as usize;
-        if end <= source.len() {
-            &source[offset..end]
-        } else {
-            &[]
-        }
+        let Some(offset) = self.source_offset().checked_add(4) else {
+            return &[];
+        };
+        let Some(end) = offset.checked_add(size as usize) else {
+            return &[];
+        };
+        source.get(offset..end).unwrap_or(&[])
     }
 
     /// Decompresses the file and returns its content.
@@ -142,24 +142,28 @@ impl<'a> ExtractedFile<'a> {
         };
 
         let source = self.data_source();
-        let offset = self.source_offset() + 4;
-        let end = offset + size as usize;
+        let offset = self.source_offset().checked_add(4).ok_or(Error::TooShort {
+            expected: usize::MAX,
+            actual: source.len(),
+            context: "file data offset overflow",
+        })?;
+        let end = offset.checked_add(size as usize).ok_or(Error::TooShort {
+            expected: usize::MAX,
+            actual: source.len(),
+            context: "file data end overflow",
+        })?;
 
-        if end > source.len() {
-            return Err(Error::TooShort {
-                expected: end,
-                actual: source.len(),
-                context: "file data payload",
-            });
-        }
-
-        let payload = &source[offset..end];
+        let payload = source.get(offset..end).ok_or(Error::TooShort {
+            expected: end,
+            actual: source.len(),
+            context: "file data payload",
+        })?;
 
         if !is_compressed {
             return Ok(payload.to_vec());
         }
 
-        let max_output = (size as usize * 10).max(64 * 1024 * 1024);
+        let max_output = (size as usize).saturating_mul(10).max(64 * 1024 * 1024);
         decompress::decompress_block(
             payload,
             self.installer.compression(),
@@ -196,7 +200,9 @@ impl<'a> ExtractedFile<'a> {
         } else {
             // In non-solid mode, data_block_offset is relative to the data
             // block start in the original file.
-            self.installer.data_block_offset() + self.data_block_offset() as usize
+            self.installer
+                .data_block_offset()
+                .saturating_add(self.data_block_offset() as usize)
         }
     }
 
@@ -204,10 +210,11 @@ impl<'a> ExtractedFile<'a> {
     fn length_prefix(&self) -> Option<(bool, u32)> {
         let source = self.data_source();
         let offset = self.source_offset();
-        if offset + 4 > source.len() {
+        let slice = source.get(offset..)?;
+        if slice.len() < 4 {
             return None;
         }
-        decompress::read_length_prefix(&source[offset..]).ok()
+        decompress::read_length_prefix(slice).ok()
     }
 }
 

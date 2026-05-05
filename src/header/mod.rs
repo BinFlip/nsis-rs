@@ -65,12 +65,18 @@ pub enum NsisVersionHint {
 /// Returns [`Error::SignatureNotFound`] if no valid signature is found.
 pub fn scan_for_first_header(overlay: &[u8]) -> Result<(usize, FirstHeader<'_>), Error> {
     // Scan at 512-byte aligned offsets, starting from offset 0.
-    let mut offset = 0;
-    while offset + FirstHeader::SIZE <= overlay.len() {
-        if let Ok(fh) = FirstHeader::parse(&overlay[offset..]) {
+    let mut offset: usize = 0;
+    while let Some(slice) = overlay.get(offset..) {
+        if slice.len() < FirstHeader::SIZE {
+            break;
+        }
+        if let Ok(fh) = FirstHeader::parse(slice) {
             return Ok((offset, fh));
         }
-        offset += 512;
+        let Some(next) = offset.checked_add(512) else {
+            break;
+        };
+        offset = next;
     }
     Err(Error::SignatureNotFound)
 }

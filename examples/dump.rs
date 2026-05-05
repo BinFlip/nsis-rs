@@ -4,6 +4,14 @@
 //!   `cargo run --example dump -- <installer.exe>`             — print info
 //!   `cargo run --example dump -- <installer.exe> --extract <outdir>` — extract files
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing
+)]
+
 use std::{collections::HashSet, env, fs, path::Path, process};
 
 fn main() {
@@ -281,9 +289,9 @@ fn main() {
                 let info = installer.resolve_opcode(e.which());
                 let mnemonic = info.map(|o| o.mnemonic).unwrap_or("???");
                 let detail = format_entry_params(&installer, &e, info);
-                println!("  {:5}: {:<25} {detail}", i, mnemonic);
+                println!("  {i:5}: {mnemonic:<25} {detail}");
             }
-            Err(e) => println!("  {:5}: <error: {e}>", i),
+            Err(e) => println!("  {i:5}: <error: {e}>"),
         }
     }
 
@@ -334,12 +342,12 @@ fn extract_files(installer: &nsis::NsisInstaller<'_>, outdir: &str) {
 
         let dest = base.join(&path);
 
-        if let Some(parent) = dest.parent() {
-            if let Err(e) = fs::create_dir_all(parent) {
-                eprintln!("  error creating directory for {path}: {e}");
-                errors += 1;
-                continue;
-            }
+        if let Some(parent) = dest.parent()
+            && let Err(e) = fs::create_dir_all(parent)
+        {
+            eprintln!("  error creating directory for {path}: {e}");
+            errors += 1;
+            continue;
         }
 
         match file.decompress() {

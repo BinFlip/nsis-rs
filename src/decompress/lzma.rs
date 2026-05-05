@@ -43,12 +43,13 @@ pub fn decompress_lzma(
         None => [0xFF; 8],
     };
 
-    let mut lzma_header = Vec::with_capacity(13 + compressed.len() - 5);
-    lzma_header.extend_from_slice(&compressed[..5]); // props + dict_size
+    let mut lzma_header = Vec::with_capacity(compressed.len().saturating_add(8));
+    let (props, body) = compressed.split_at(5);
+    lzma_header.extend_from_slice(props); // props + dict_size
     lzma_header.extend_from_slice(&uncompressed_size_bytes);
-    lzma_header.extend_from_slice(&compressed[5..]);
+    lzma_header.extend_from_slice(body);
 
-    let mut output = Vec::with_capacity(max_output.min(compressed.len() * 4));
+    let mut output = Vec::with_capacity(max_output.min(compressed.len().saturating_mul(4)));
 
     // When expected_size is None (unknown decompressed size), lzma-rs will
     // decompress until it hits the EOS marker. If there are trailing bytes
